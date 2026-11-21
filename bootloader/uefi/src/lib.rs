@@ -6,7 +6,7 @@
 //! loading are deferred to a later implementation stage. This crate is a
 //! library scaffold, not yet a bootable UEFI application.
 
-pub use wicofe_bootloader_common::{BootInfo, MemoryRegion, BOOT_INFO_VERSION};
+pub use wicofe_bootloader_common::{BOOT_INFO_VERSION, BootInfo, MemoryRegion};
 
 /// UEFI removable-media fallback path for x86-64 firmware.
 pub const X86_64_FALLBACK_PATH: &str = r"\EFI\BOOT\BOOTX64.EFI";
