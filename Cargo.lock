@@ -13,6 +13,7 @@ name = "wicofe-bootloader-uefi"
 version = "0.1.0"
 dependencies = [
  "wicofe-bootloader-common",
+ "wicofe-bootloader-elf",
 ]
 
 [[package]]

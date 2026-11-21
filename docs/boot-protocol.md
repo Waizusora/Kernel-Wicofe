@@ -203,10 +203,16 @@ versioned extensions and must not be placed in reserved fields.
 
 ## 10. UEFI application artifact status
 
-The wicofe-bootloader-uefi package builds a wbl binary for both
-x86_64-unknown-uefi and aarch64-unknown-uefi. Its current entry point
-validates the system-table and text-output protocol pointers and prints a
-startup marker. It is an initial PE/COFF UEFI application, not yet a kernel
-loader. It does not locate a filesystem, read the kernel file, allocate or
-map PT_LOAD segments, obtain the final memory map, call ExitBootServices,
-or transfer control to the kernel.
+The WBL UEFI application locates the filesystem on the same device from
+which the firmware loaded the application, opens \EFI\WICOFE\KERNEL.ELF,
+and reads it into a bounded UEFI pool allocation. The file size must be
+nonzero and no larger than 64 MiB. WBL then validates the ELF64 ET_EXEC
+headers and PT_LOAD layout for the active architecture using the shared
+no_std ELF parser. File and directory handles are closed and temporary
+metadata/image buffers are released on completion or failure.
+
+This stage does not yet allocate physical PT_LOAD destinations, copy kernel
+segments, create page tables or a bootstrap stack, capture the final memory
+map, call ExitBootServices, or transfer control to the kernel. A successful
+CI build proves PE/COFF compilation only; it does not prove execution on
+firmware or QEMU.

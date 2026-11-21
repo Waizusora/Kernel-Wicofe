@@ -10,6 +10,7 @@ uefi = []
 
 [dependencies]
 wicofe-bootloader-common = { path = "../common" }
+wicofe-bootloader-elf = { path = "../elf" }
 
 [lib]
 path = "src/lib.rs"
