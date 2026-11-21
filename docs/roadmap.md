@@ -18,7 +18,7 @@
 
 ## Milestone 2 — UEFI WBL execution path
 
-- [ ] Add architecture-specific UEFI entry points.
+- [x] Add architecture-neutral UEFI application entry point and PE/COFF build targets.
 - [ ] Enumerate firmware protocols and load a kernel image from a defined filesystem.
 - [x] Implement bounds-checked ELF64 ET_EXEC validation for x86-64 and AArch64.
 - [ ] Allocate and load ELF PT_LOAD segments with architecture-correct mappings.

@@ -11,5 +11,11 @@ wicofe-bootloader-common = { path = "../common" }
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "wbl"
+path = "src/main.rs"
+test = false
+bench = false
+
 [lints]
 workspace = true

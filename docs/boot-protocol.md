@@ -200,3 +200,13 @@ ABI v2 does not standardize framebuffer geometry, SMP topology, entropy,
 SMBIOS, device-tree handoff, runtime-service access, IOMMU state, hibernation,
 secure-boot policy, or kernel command-line encoding. These require separate
 versioned extensions and must not be placed in reserved fields.
+
+## 10. UEFI application artifact status
+
+The wicofe-bootloader-uefi package builds a wbl binary for both
+x86_64-unknown-uefi and aarch64-unknown-uefi. Its current entry point
+validates the system-table and text-output protocol pointers and prints a
+startup marker. It is an initial PE/COFF UEFI application, not yet a kernel
+loader. It does not locate a filesystem, read the kernel file, allocate or
+map PT_LOAD segments, obtain the final memory map, call ExitBootServices,
+or transfer control to the kernel.
