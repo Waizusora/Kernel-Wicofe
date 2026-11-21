@@ -95,9 +95,7 @@ pub fn validate_boot_info(
     if info.struct_size as usize != core::mem::size_of::<BootInfo>() {
         return Err(BootInfoError::InvalidStructureSize);
     }
-    if info.architecture != architecture::X86_64
-        && info.architecture != architecture::AARCH64
-    {
+    if info.architecture != architecture::X86_64 && info.architecture != architecture::AARCH64 {
         return Err(BootInfoError::UnsupportedArchitecture);
     }
     if info.flags != 0 || info.reserved != 0 {
@@ -258,7 +256,10 @@ mod tests {
         let map = valid_map();
         let mut info = valid_info();
         info.magic = 0;
-        assert_eq!(validate_boot_info(&info, &map), Err(BootInfoError::InvalidMagic));
+        assert_eq!(
+            validate_boot_info(&info, &map),
+            Err(BootInfoError::InvalidMagic)
+        );
         info = valid_info();
         info.version += 1;
         assert_eq!(
@@ -324,8 +325,7 @@ mod tests {
     fn rejects_conflicting_cache_attributes() {
         let info = valid_info();
         let mut map = valid_map();
-        map[1].attributes = memory_attribute::CACHE_WRITE_BACK
-            | memory_attribute::CACHE_UNCACHED;
+        map[1].attributes = memory_attribute::CACHE_WRITE_BACK | memory_attribute::CACHE_UNCACHED;
         assert_eq!(
             validate_boot_info(&info, &map),
             Err(BootInfoError::InvalidMemoryAttributes)
