@@ -53,8 +53,8 @@ const fn ascii_to_utf16<const N: usize>(input: &[u8; N]) -> [u16; N] {
     output
 }
 
-const MESSAGE: [u16; _] =
-    ascii_to_utf16(b"Wicofe Bootloader: UEFI entry reached.\r\nELF validation core ready.\r\n\0");
+const MESSAGE: &[u16] =
+    &ascii_to_utf16(b"Wicofe Bootloader: UEFI entry reached.\r\nELF validation core ready.\r\n\0");
 
 #[unsafe(no_mangle)]
 pub extern "efiapi" fn efi_main(_image_handle: Handle, system_table: *mut SystemTable) -> Status {
