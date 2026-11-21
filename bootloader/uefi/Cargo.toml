@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+uefi = []
+
 [dependencies]
 wicofe-bootloader-common = { path = "../common" }
 
@@ -16,6 +19,7 @@ name = "wbl"
 path = "src/main.rs"
 test = false
 bench = false
+required-features = ["uefi"]
 
 [lints]
 workspace = true
