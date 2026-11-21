@@ -206,13 +206,19 @@ versioned extensions and must not be placed in reserved fields.
 The WBL UEFI application locates the filesystem on the same device from
 which the firmware loaded the application, opens \EFI\WICOFE\KERNEL.ELF,
 and reads it into a bounded UEFI pool allocation. The file size must be
-nonzero and no larger than 64 MiB. WBL then validates the ELF64 ET_EXEC
-headers and PT_LOAD layout for the active architecture using the shared
-no_std ELF parser. File and directory handles are closed and temporary
-metadata/image buffers are released on completion or failure.
+nonzero and no larger than 64 MiB. WBL validates the ELF64 ET_EXEC headers
+and PT_LOAD layout for the active architecture using the shared no_std ELF
+parser.
 
-This stage does not yet allocate physical PT_LOAD destinations, copy kernel
-segments, create page tables or a bootstrap stack, capture the final memory
-map, call ExitBootServices, or transfer control to the kernel. A successful
-CI build proves PE/COFF compilation only; it does not prove execution on
-firmware or QEMU.
+WBL then allocates a contiguous physical span with a 2 MiB-aligned base,
+bounded to 512 MiB plus alignment slack. The span is zeroed before PT_LOAD
+file bytes are copied to their virtual-address-relative offsets; the zeroed
+remainder of each segment supplies BSS. Unused prefix and suffix pages are
+released when possible. The temporary file buffer and file handles are
+released after the copy.
+
+This stage does not yet establish page tables or map the physical span at
+the kernel's linked virtual base. It also does not create the bootstrap
+stack, capture the final memory map, call ExitBootServices, or transfer
+control to the kernel. A successful CI build proves PE/COFF compilation
+only; it does not prove execution on firmware or QEMU.

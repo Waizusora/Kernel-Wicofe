@@ -7,7 +7,10 @@ use core::panic::PanicInfo;
 use wicofe_bootloader_elf::EM_AARCH64;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_elf::EM_X86_64;
-use wicofe_bootloader_elf::ElfImage;
+use wicofe_bootloader_elf::{ElfImage, LoadSegment};
+use wicofe_bootloader_uefi::{
+    kernel_allocation_layout, KERNEL_PHYSICAL_ALIGNMENT, UEFI_PAGE_SIZE,
+};
 
 type Status = usize;
 type Handle = *mut c_void;
@@ -82,12 +85,17 @@ struct SystemTable {
 }
 
 type HandleProtocolFn = unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void) -> Status;
+type AllocatePagesFn = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
+type FreePagesFn = unsafe extern "efiapi" fn(u64, usize) -> Status;
 type AllocatePoolFn = unsafe extern "efiapi" fn(u32, usize, *mut *mut c_void) -> Status;
 type FreePoolFn = unsafe extern "efiapi" fn(*mut c_void) -> Status;
 #[repr(C)]
 struct BootServices {
     header: TableHeader,
-    before_pool: [usize; 5],
+    before_pages: [usize; 2],
+    allocate_pages: Option<AllocatePagesFn>,
+    free_pages: Option<FreePagesFn>,
+    before_pool: [usize; 1],
     allocate_pool: Option<AllocatePoolFn>,
     free_pool: Option<FreePoolFn>,
     between_pool_and_handle: [usize; 9],
@@ -295,6 +303,164 @@ unsafe fn read_kernel(
     result
 }
 
+
+#[derive(Clone, Copy)]
+struct LoadedKernel {
+    physical_base: u64,
+    virtual_base: u64,
+    image_size: u64,
+    entry: u64,
+}
+
+unsafe fn free_pages(services: &BootServices, address: u64, pages: usize) {
+    if pages != 0 {
+        if let Some(function) = services.free_pages {
+            // SAFETY: the range is a page-aligned subrange of our AllocatePages result.
+            let _ = unsafe { function(address, pages) };
+        }
+    }
+}
+
+unsafe fn load_segments(
+    services: &BootServices,
+    file_image: &[u8],
+    parsed: &ElfImage<'_>,
+) -> Result<LoadedKernel, Status> {
+    let layout = kernel_allocation_layout(parsed.image_size()).ok_or(EFI_INVALID_PARAMETER)?;
+    let allocate = services.allocate_pages.ok_or(EFI_INVALID_PARAMETER)?;
+    let release = services.free_pages.ok_or(EFI_INVALID_PARAMETER)?;
+    let mut raw_base = 0_u64;
+    // AllocateAnyPages, EfiLoaderData.
+    // SAFETY: AllocatePages receives a valid output pointer and bounded page count.
+    let status = unsafe {
+        allocate(
+            0,
+            EFI_LOADER_DATA,
+            layout.allocation_pages,
+            &mut raw_base,
+        )
+    };
+    if is_error(status) {
+        return Err(status);
+    }
+    if raw_base == 0 {
+        // SAFETY: release the allocation returned by firmware.
+        let _ = unsafe { release(raw_base, layout.allocation_pages) };
+        return Err(EFI_INVALID_PARAMETER);
+    }
+
+    let allocation_end = match raw_base.checked_add(layout.allocation_size) {
+        Some(value) => value,
+        None => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(raw_base, layout.allocation_pages) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let aligned_base = match raw_base
+        .checked_add(KERNEL_PHYSICAL_ALIGNMENT - 1)
+        .map(|value| value & !(KERNEL_PHYSICAL_ALIGNMENT - 1))
+    {
+        Some(value) => value,
+        None => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(raw_base, layout.allocation_pages) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let image_end = match aligned_base.checked_add(layout.rounded_image_size) {
+        Some(value) if value <= allocation_end => value,
+        _ => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(raw_base, layout.allocation_pages) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let image_address = match usize::try_from(aligned_base) {
+        Ok(value) => value,
+        Err(_) => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(raw_base, layout.allocation_pages) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let image_length = match usize::try_from(layout.rounded_image_size) {
+        Ok(value) => value,
+        Err(_) => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(raw_base, layout.allocation_pages) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+
+    let destination = image_address as *mut u8;
+    // SAFETY: destination spans the rounded image size inside our allocated pages.
+    unsafe { core::ptr::write_bytes(destination, 0, image_length) };
+
+    let populate_result = (|| {
+        for index in 0..parsed.program_header_count() {
+            let Some(segment) = parsed.load_segment(index) else {
+                continue;
+            };
+            copy_segment(file_image, destination, image_length, parsed.image_base(), segment)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(status) = populate_result {
+        // SAFETY: no subranges have been released yet; free the full allocation.
+        let _ = unsafe { release(raw_base, layout.allocation_pages) };
+        return Err(status);
+    }
+
+    let prefix_pages = ((aligned_base - raw_base) / UEFI_PAGE_SIZE) as usize;
+    let suffix_pages = ((allocation_end - image_end) / UEFI_PAGE_SIZE) as usize;
+    // SAFETY: these page-aligned ranges lie outside the copied kernel image.
+    unsafe { free_pages(services, raw_base, prefix_pages) };
+    unsafe { free_pages(services, image_end, suffix_pages) };
+
+    Ok(LoadedKernel {
+        physical_base: aligned_base,
+        virtual_base: parsed.image_base(),
+        image_size: parsed.image_size(),
+        entry: parsed.entry(),
+    })
+}
+
+fn copy_segment(
+    file_image: &[u8],
+    destination: *mut u8,
+    destination_length: usize,
+    image_base: u64,
+    segment: LoadSegment,
+) -> Result<(), Status> {
+    let source_start = usize::try_from(segment.file_offset).map_err(|_| EFI_INVALID_PARAMETER)?;
+    let source_length = usize::try_from(segment.file_size).map_err(|_| EFI_INVALID_PARAMETER)?;
+    let destination_start = usize::try_from(
+        segment
+            .virtual_address
+            .checked_sub(image_base)
+            .ok_or(EFI_INVALID_PARAMETER)?,
+    )
+    .map_err(|_| EFI_INVALID_PARAMETER)?;
+    let destination_size = usize::try_from(segment.memory_size).map_err(|_| EFI_INVALID_PARAMETER)?;
+    let source_end = source_start.checked_add(source_length).ok_or(EFI_INVALID_PARAMETER)?;
+    let destination_end = destination_start.checked_add(destination_size).ok_or(EFI_INVALID_PARAMETER)?;
+    if source_end > file_image.len() || destination_end > destination_length {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+    // The destination was zeroed before copying; the remainder of p_memsz is BSS.
+    // SAFETY: parser and explicit bounds checks validated both non-overlapping ranges.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            file_image.as_ptr().add(source_start),
+            destination.add(destination_start),
+            source_length,
+        )
+    };
+    Ok(())
+}
+
 fn print_message(system_table: *mut SystemTable, message: &'static [u16]) -> Status {
     if system_table.is_null() {
         return EFI_INVALID_PARAMETER;
@@ -324,6 +490,12 @@ const VALID_MESSAGE: &[u16] = &[
     0x0065, 0x0061, 0x0064, 0x0020, 0x0061, 0x006e, 0x0064, 0x0020, 0x0045, 0x004c, 0x0046, 0x0036,
     0x0034, 0x0020, 0x0076, 0x0061, 0x006c, 0x0069, 0x0064, 0x0061, 0x0074, 0x0065, 0x0064, 0x002e,
     0x000d, 0x000a, 0,
+];
+const LOADED_MESSAGE: &[u16] = &[
+    0x0050, 0x0054, 0x005f, 0x004c, 0x004f, 0x0041, 0x0044, 0x0020, 0x0073, 0x0075, 0x0063, 0x0063,
+    0x0065, 0x0073, 0x0073, 0x0066, 0x0075, 0x006c, 0x003b, 0x0020, 0x006e, 0x006f, 0x0020, 0x0068,
+    0x0061, 0x006e, 0x0064, 0x006f, 0x0066, 0x0066, 0x0020, 0x0079, 0x0065, 0x0074, 0x002e, 0x000d,
+    0x000a, 0,
 ];
 const ERROR_MESSAGE: &[u16] = &[
     0x0057, 0x0042, 0x004c, 0x003a, 0x0020, 0x006b, 0x0065, 0x0072, 0x006e, 0x0065, 0x006c, 0x0020,
@@ -359,17 +531,30 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
     let expected_machine = EM_AARCH64;
 
     // SAFETY: image is a live buffer of image_size bytes allocated by UEFI.
-    let parsed = unsafe {
-        ElfImage::parse(
-            core::slice::from_raw_parts(image, image_size),
-            expected_machine,
-        )
+    let loaded_kernel = {
+        // SAFETY: image is a live buffer of image_size bytes allocated by UEFI.
+        let file_image = unsafe { core::slice::from_raw_parts(image, image_size) };
+        match ElfImage::parse(file_image, expected_machine) {
+            Ok(parsed) => {
+                // SAFETY: parsed references file_image, and boot services are still active.
+                unsafe { load_segments(&*boot_services, file_image, &parsed) }
+            }
+            Err(_) => Err(EFI_INVALID_PARAMETER),
+        }
     };
-    // SAFETY: release the file buffer after validation; no pointer into it is retained.
+    // SAFETY: release the temporary source file after parsing and copying finish.
     unsafe { free_pool(&*boot_services, image.cast()) };
 
-    match parsed {
-        Ok(_) => print_message(system_table, VALID_MESSAGE),
+    match loaded_kernel {
+        Ok(kernel) => {
+            let _kernel_handoff_metadata = (
+                kernel.physical_base,
+                kernel.virtual_base,
+                kernel.image_size,
+                kernel.entry,
+            );
+            print_message(system_table, LOADED_MESSAGE)
+        }
         Err(_) => {
             let _ = print_message(system_table, ERROR_MESSAGE);
             EFI_INVALID_PARAMETER
