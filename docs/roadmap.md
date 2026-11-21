@@ -12,25 +12,29 @@ Completion requires all GitHub Actions jobs for the milestone commit to pass.
 
 ## Milestone 1 — boot protocol specification
 
-- Define the kernel image format and load-address policy.
-- Specify the complete versioned boot information ABI.
-- Specify memory-map ownership and UEFI ExitBootServices retry behavior.
-- Define architecture-specific entry state for x86_64 and AArch64.
-- Add host-side tests for malformed and unsupported handoff data.
+- [x] Define ELF64 ET_EXEC format, architecture IDs, and fixed load-address policy.
+- [x] Specify versioned BootInfo ABI v2 and canonical memory-map types.
+- [x] Specify memory ownership and UEFI ExitBootServices retry behavior.
+- [x] Define x86-64 and AArch64 entry register, stack, paging, and interrupt state.
+- [x] Add host-side ABI layout and malformed-handoff validation tests.
+
+Completion requires all GitHub Actions jobs for the milestone commit to pass.
+The specification is normative for future implementation, but does not itself
+provide a bootable UEFI application.
 
 ## Milestone 2 — UEFI WBL execution path
 
-- Add architecture-specific UEFI entry points.
-- Enumerate firmware protocols and load a kernel image from a defined filesystem.
-- Validate ELF headers and segments before loading.
-- Capture the final memory map and transfer control.
-- Add QEMU/OVMF boot tests before claiming boot support.
+- [ ] Add architecture-specific UEFI entry points.
+- [ ] Enumerate firmware protocols and load a kernel image from a defined filesystem.
+- [ ] Validate ELF headers and segments before loading.
+- [ ] Capture the final memory map and transfer control.
+- [ ] Add QEMU/OVMF boot tests before claiming boot support.
 
 ## Milestone 3 — kernel entry and early architecture setup
 
-- Establish CPU execution state and exception/interrupt vectors.
-- Initialize physical memory management.
-- Add serial/early-console diagnostics for both architectures.
+- [ ] Establish CPU execution state and exception/interrupt vectors.
+- [ ] Initialize physical memory management.
+- [ ] Add serial/early-console diagnostics for both architectures.
 
 ## Later milestones
 
