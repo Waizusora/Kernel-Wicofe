@@ -1,0 +1,23 @@
+version = 4
+
+[[package]]
+name = "wicofe-bootloader-common"
+version = "0.1.0"
+
+[[package]]
+name = "wicofe-bootloader-uefi"
+version = "0.1.0"
+dependencies = ["wicofe-bootloader-common"]
+
+[[package]]
+name = "wicofe-kernel-aarch64"
+version = "0.1.0"
+
+[[package]]
+name = "wicofe-kernel-core"
+version = "0.1.0"
+dependencies = ["wicofe-bootloader-common"]
+
+[[package]]
+name = "wicofe-kernel-x86_64"
+version = "0.1.0"

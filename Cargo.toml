@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = ["bootloader/common", "bootloader/uefi", "kernel/core", "kernel/arch/x86_64", "kernel/arch/aarch64"]
+
+[workspace.package]
+edition = "2024"
+license = "MPL-2.0"
+rust-version = "1.85"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
