@@ -155,6 +155,9 @@ impl<'a> ElfImage<'a> {
                 continue;
             }
             let segment = segment.ok_or(ElfError::InvalidLoadSegment)?;
+            if load_count == 0 && segment.virtual_address != image_base {
+                return Err(ElfError::SegmentOutsideKernelImage);
+            }
             load_count += 1;
 
             if segment.memory_size == 0 || segment.file_size > segment.memory_size {
@@ -398,6 +401,7 @@ mod tests {
     fn rejects_file_bounds_and_writable_executable_segments() {
         let mut bytes = image(EM_X86_64);
         put_u64(&mut bytes, 96, 0x2000);
+        put_u64(&mut bytes, 104, 0x3000);
         assert_eq!(
             ElfImage::parse(&bytes, EM_X86_64).err(),
             Some(ElfError::FileRangeOutOfBounds)
