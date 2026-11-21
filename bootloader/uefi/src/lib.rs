@@ -26,10 +26,9 @@ pub fn kernel_allocation_layout(image_size: u64) -> Option<KernelAllocationLayou
         return None;
     }
 
-    let rounded_image_size = image_size.checked_add(UEFI_PAGE_SIZE - 1)?
-        & !(UEFI_PAGE_SIZE - 1);
-    let allocation_size = rounded_image_size
-        .checked_add(KERNEL_PHYSICAL_ALIGNMENT - UEFI_PAGE_SIZE)?;
+    let rounded_image_size = image_size.checked_add(UEFI_PAGE_SIZE - 1)? & !(UEFI_PAGE_SIZE - 1);
+    let allocation_size =
+        rounded_image_size.checked_add(KERNEL_PHYSICAL_ALIGNMENT - UEFI_PAGE_SIZE)?;
     let image_pages = usize::try_from(rounded_image_size / UEFI_PAGE_SIZE).ok()?;
     let allocation_pages = usize::try_from(allocation_size / UEFI_PAGE_SIZE).ok()?;
 
@@ -62,15 +61,24 @@ mod tests {
         let layout = kernel_allocation_layout(UEFI_PAGE_SIZE + 1).unwrap();
         assert_eq!(layout.rounded_image_size, 2 * UEFI_PAGE_SIZE);
         assert_eq!(layout.image_pages, 2);
-        assert_eq!(layout.allocation_size, 2 * UEFI_PAGE_SIZE + KERNEL_PHYSICAL_ALIGNMENT - UEFI_PAGE_SIZE);
-        assert_eq!(layout.allocation_pages, layout.allocation_size as usize / UEFI_PAGE_SIZE as usize);
+        assert_eq!(
+            layout.allocation_size,
+            2 * UEFI_PAGE_SIZE + KERNEL_PHYSICAL_ALIGNMENT - UEFI_PAGE_SIZE
+        );
+        assert_eq!(
+            layout.allocation_pages,
+            layout.allocation_size as usize / UEFI_PAGE_SIZE as usize
+        );
     }
 
     #[test]
     fn allocation_layout_handles_alignment_boundaries() {
         let layout = kernel_allocation_layout(KERNEL_PHYSICAL_ALIGNMENT).unwrap();
         assert_eq!(layout.rounded_image_size, KERNEL_PHYSICAL_ALIGNMENT);
-        assert_eq!(layout.allocation_size, 2 * KERNEL_PHYSICAL_ALIGNMENT - UEFI_PAGE_SIZE);
+        assert_eq!(
+            layout.allocation_size,
+            2 * KERNEL_PHYSICAL_ALIGNMENT - UEFI_PAGE_SIZE
+        );
     }
 
     #[test]

@@ -8,9 +8,7 @@ use wicofe_bootloader_elf::EM_AARCH64;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_elf::EM_X86_64;
 use wicofe_bootloader_elf::{ElfImage, LoadSegment};
-use wicofe_bootloader_uefi::{
-    kernel_allocation_layout, KERNEL_PHYSICAL_ALIGNMENT, UEFI_PAGE_SIZE,
-};
+use wicofe_bootloader_uefi::{KERNEL_PHYSICAL_ALIGNMENT, UEFI_PAGE_SIZE, kernel_allocation_layout};
 
 type Status = usize;
 type Handle = *mut c_void;
@@ -303,7 +301,6 @@ unsafe fn read_kernel(
     result
 }
 
-
 #[derive(Clone, Copy)]
 struct LoadedKernel {
     physical_base: u64,
@@ -332,14 +329,7 @@ unsafe fn load_segments(
     let mut raw_base = 0_u64;
     // AllocateAnyPages, EfiLoaderData.
     // SAFETY: AllocatePages receives a valid output pointer and bounded page count.
-    let status = unsafe {
-        allocate(
-            0,
-            EFI_LOADER_DATA,
-            layout.allocation_pages,
-            &mut raw_base,
-        )
-    };
+    let status = unsafe { allocate(0, EFI_LOADER_DATA, layout.allocation_pages, &mut raw_base) };
     if is_error(status) {
         return Err(status);
     }
@@ -402,7 +392,13 @@ unsafe fn load_segments(
             let Some(segment) = parsed.load_segment(index) else {
                 continue;
             };
-            copy_segment(file_image, destination, image_length, parsed.image_base(), segment)?;
+            copy_segment(
+                file_image,
+                destination,
+                image_length,
+                parsed.image_base(),
+                segment,
+            )?;
         }
         Ok(())
     })();
@@ -443,9 +439,14 @@ fn copy_segment(
             .ok_or(EFI_INVALID_PARAMETER)?,
     )
     .map_err(|_| EFI_INVALID_PARAMETER)?;
-    let destination_size = usize::try_from(segment.memory_size).map_err(|_| EFI_INVALID_PARAMETER)?;
-    let source_end = source_start.checked_add(source_length).ok_or(EFI_INVALID_PARAMETER)?;
-    let destination_end = destination_start.checked_add(destination_size).ok_or(EFI_INVALID_PARAMETER)?;
+    let destination_size =
+        usize::try_from(segment.memory_size).map_err(|_| EFI_INVALID_PARAMETER)?;
+    let source_end = source_start
+        .checked_add(source_length)
+        .ok_or(EFI_INVALID_PARAMETER)?;
+    let destination_end = destination_start
+        .checked_add(destination_size)
+        .ok_or(EFI_INVALID_PARAMETER)?;
     if source_end > file_image.len() || destination_end > destination_length {
         return Err(EFI_INVALID_PARAMETER);
     }
