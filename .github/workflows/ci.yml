@@ -68,4 +68,4 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Link UEFI PE/COFF application
-        run: cargo build --locked -p wicofe-bootloader-uefi --bin wbl --target ${{ matrix.target }}
+        run: cargo build --locked -p wicofe-bootloader-uefi --features uefi --bin wbl --target ${{ matrix.target }}
