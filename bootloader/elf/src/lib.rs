@@ -115,9 +115,7 @@ impl<'a> ElfImage<'a> {
         if version != 1 {
             return Err(ElfError::UnsupportedIdentVersion);
         }
-        if machine != expected_machine
-            || (machine != EM_X86_64 && machine != EM_AARCH64)
-        {
+        if machine != expected_machine || (machine != EM_X86_64 && machine != EM_AARCH64) {
             return Err(ElfError::UnsupportedMachine);
         }
         if ehsize as usize != ELF64_HEADER_SIZE {
@@ -157,6 +155,9 @@ impl<'a> ElfImage<'a> {
                 continue;
             }
             let segment = segment.ok_or(ElfError::InvalidLoadSegment)?;
+            if load_count == 0 && segment.virtual_address != image_base {
+                return Err(ElfError::SegmentOutsideKernelImage);
+            }
             load_count += 1;
 
             if segment.memory_size == 0 || segment.file_size > segment.memory_size {
@@ -195,10 +196,7 @@ impl<'a> ElfImage<'a> {
             if memory_end > image_end {
                 image_end = memory_end;
             }
-            if segment.is_executable()
-                && entry >= segment.virtual_address
-                && entry < memory_end
-            {
+            if segment.is_executable() && entry >= segment.virtual_address && entry < memory_end {
                 entry_is_executable = true;
             }
 
@@ -279,16 +277,13 @@ fn parse_program_header(
         return Ok(None);
     }
     let flags = read_u32(bytes, offset + 4).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
-    let file_offset =
-        read_u64(bytes, offset + 8).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
+    let file_offset = read_u64(bytes, offset + 8).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
     let virtual_address =
         read_u64(bytes, offset + 16).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
-    let file_size =
-        read_u64(bytes, offset + 32).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
+    let file_size = read_u64(bytes, offset + 32).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
     let memory_size =
         read_u64(bytes, offset + 40).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
-    let alignment =
-        read_u64(bytes, offset + 48).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
+    let alignment = read_u64(bytes, offset + 48).ok_or(ElfError::ProgramHeaderTableOutOfBounds)?;
 
     Ok(Some(LoadSegment {
         file_offset,
@@ -301,15 +296,21 @@ fn parse_program_header(
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?))
+    Some(u16::from_le_bytes(
+        bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
+    ))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?))
+    Some(u32::from_le_bytes(
+        bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?))
+    Some(u64::from_le_bytes(
+        bytes.get(offset..offset.checked_add(8)?)?.try_into().ok()?,
+    ))
 }
 
 #[cfg(test)]
@@ -400,6 +401,7 @@ mod tests {
     fn rejects_file_bounds_and_writable_executable_segments() {
         let mut bytes = image(EM_X86_64);
         put_u64(&mut bytes, 96, 0x2000);
+        put_u64(&mut bytes, 104, 0x3000);
         assert_eq!(
             ElfImage::parse(&bytes, EM_X86_64).err(),
             Some(ElfError::FileRangeOutOfBounds)
