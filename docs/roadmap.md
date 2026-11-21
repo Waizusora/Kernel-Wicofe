@@ -8,8 +8,6 @@
 - [x] x86_64 and AArch64 crate boundaries.
 - [x] CI format, host test, lint, and four-target compile checks.
 
-Completion requires all GitHub Actions jobs for the milestone commit to pass.
-
 ## Milestone 1 — boot protocol specification
 
 - [x] Define ELF64 ET_EXEC format, architecture IDs, and fixed load-address policy.
@@ -18,17 +16,14 @@ Completion requires all GitHub Actions jobs for the milestone commit to pass.
 - [x] Define x86-64 and AArch64 entry register, stack, paging, and interrupt state.
 - [x] Add host-side ABI layout and malformed-handoff validation tests.
 
-Completion requires all GitHub Actions jobs for the milestone commit to pass.
-The specification is normative for future implementation, but does not itself
-provide a bootable UEFI application.
-
 ## Milestone 2 — UEFI WBL execution path
 
 - [ ] Add architecture-specific UEFI entry points.
 - [ ] Enumerate firmware protocols and load a kernel image from a defined filesystem.
-- [ ] Validate ELF headers and segments before loading.
+- [x] Implement bounds-checked ELF64 ET_EXEC validation for x86-64 and AArch64.
+- [ ] Allocate and load ELF PT_LOAD segments with architecture-correct mappings.
 - [ ] Capture the final memory map and transfer control.
-- [ ] Add QEMU/OVMF boot tests before claiming boot support.
+- [ ] Add QEMU/OVMF boot tests for both architectures before claiming boot support.
 
 ## Milestone 3 — kernel entry and early architecture setup
 

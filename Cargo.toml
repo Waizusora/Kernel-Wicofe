@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["bootloader/common", "bootloader/uefi", "kernel/core", "kernel/arch/x86_64", "kernel/arch/aarch64"]
+members = [
+    "bootloader/common",
+    "bootloader/elf",
+    "bootloader/uefi",
+    "kernel/core",
+    "kernel/arch/x86_64",
+    "kernel/arch/aarch64",
+]
 
 [workspace.package]
 edition = "2024"

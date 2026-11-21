@@ -1,8 +1,8 @@
 # WBL boot protocol — ABI v2
 
-Status: normative design contract for Milestone 1. The UEFI execution path is
-not implemented yet. MUST, MUST NOT, SHOULD, and MAY describe requirements
-for the future Wicofe Bootloader (WBL) and kernel implementations.
+Status: normative design contract for Milestone 1 and the implementation
+baseline for Milestone 2. The UEFI execution path is not yet complete.
+MUST, MUST NOT, SHOULD, and MAY describe requirements for WBL and the kernel.
 
 ## 1. Supported execution targets
 
@@ -22,20 +22,20 @@ Fixed linked virtual bases:
 | x86-64 | 0xffffffff80000000 |
 | AArch64 | 0xffff000000000000 |
 
-The image span is the interval from the lowest to highest byte covered by
-PT_LOAD segments. WBL allocates one contiguous physical span, zeroes it, and
-copies each loadable segment to the offset corresponding to p_vaddr relative
-to the linked virtual base. p_paddr is ignored. This preserves virtual segment
-spacing and gives BootInfo one physical base. WBL MUST reject segments outside
-the image span, arithmetic overflow, invalid alignment, overlapping load
-segments with conflicting permissions, and an entry point not contained in
-an executable PT_LOAD segment. p_filesz MUST NOT exceed p_memsz; the zeroed
-tail represents BSS.
+The first PT_LOAD segment MUST begin at the architecture's fixed kernel
+virtual base. The image span is the interval from that base to the highest
+byte covered by PT_LOAD segments. WBL allocates one contiguous physical span,
+zeroes it, and copies each loadable segment to the offset corresponding to
+p_vaddr relative to the fixed base. p_paddr is ignored. WBL MUST reject
+segments outside the image span, arithmetic overflow, invalid alignment,
+overlapping load segments, writable-executable segments, and an entry point
+not contained in an executable PT_LOAD segment. p_filesz MUST NOT exceed
+p_memsz; the zero-filled tail represents BSS.
 
-WBL MUST validate ELF headers and program-header bounds before allocating or
-copying. It MUST NOT interpret section headers as load instructions. Dynamic
-linking, ET_DYN, relocations, kernel modules, and compressed images are out
-of scope for ABI v2.
+WBL MUST validate ELF headers and all program-header bounds before allocating
+or copying. It MUST NOT interpret section headers as load instructions.
+Dynamic linking, ET_DYN, relocations, kernel modules, and compressed images
+are out of scope for ABI v2.
 
 ## 2. BootInfo ABI v2
 
@@ -48,7 +48,6 @@ Canonical definitions are in bootloader/common/src/lib.rs.
 - All fields are fixed-width integers. Addresses are integer addresses, never
   Rust pointers, usize, Rust enums, or bool.
 - struct_size MUST equal 88 for version 2. Unknown versions are rejected.
-  Future versions must define explicit compatibility rules.
 - flags and reserved MUST be zero.
 - memory_map_entry_size MUST equal 24. The array MUST contain at least one
   entry; its address MUST be nonzero and 8-byte aligned; its count MUST match.
