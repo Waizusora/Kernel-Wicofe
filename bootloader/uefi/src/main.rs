@@ -3,11 +3,11 @@
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
-use wicofe_bootloader_elf::ElfImage;
 #[cfg(target_arch = "aarch64")]
 use wicofe_bootloader_elf::EM_AARCH64;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_elf::EM_X86_64;
+use wicofe_bootloader_elf::ElfImage;
 
 type Status = usize;
 type Handle = *mut c_void;
@@ -19,9 +19,8 @@ const EFI_LOADER_DATA: u32 = 2;
 const EFI_FILE_MODE_READ: u64 = 1;
 const MAX_KERNEL_SIZE: usize = 64 * 1024 * 1024;
 const KERNEL_PATH: &[u16] = &[
-    0x005c, 0x0045, 0x0046, 0x0049, 0x005c, 0x0057, 0x0049, 0x0043, 0x004f, 0x0046,
-    0x0045, 0x005c, 0x004b, 0x0045, 0x0052, 0x004e, 0x0045, 0x004c, 0x002e, 0x0045,
-    0x004c, 0x0046, 0,
+    0x005c, 0x0045, 0x0046, 0x0049, 0x005c, 0x0057, 0x0049, 0x0043, 0x004f, 0x0046, 0x0045, 0x005c,
+    0x004b, 0x0045, 0x0052, 0x004e, 0x0045, 0x004c, 0x002e, 0x0045, 0x004c, 0x0046, 0,
 ];
 
 #[repr(C)]
@@ -33,15 +32,21 @@ struct Guid {
     data4: [u8; 8],
 }
 const LOADED_IMAGE_GUID: Guid = Guid {
-    data1: 0x5b1b31a1, data2: 0x9562, data3: 0x11d2,
+    data1: 0x5b1b31a1,
+    data2: 0x9562,
+    data3: 0x11d2,
     data4: [0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
 const SIMPLE_FS_GUID: Guid = Guid {
-    data1: 0x964e5b22, data2: 0x6459, data3: 0x11d2,
+    data1: 0x964e5b22,
+    data2: 0x6459,
+    data3: 0x11d2,
     data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
 const FILE_INFO_GUID: Guid = Guid {
-    data1: 0x09576e92, data2: 0x6d3f, data3: 0x11d2,
+    data1: 0x09576e92,
+    data2: 0x6d3f,
+    data3: 0x11d2,
     data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
 };
 
@@ -105,16 +110,24 @@ struct LoadedImageProtocol {
     image_data_type: u32,
     unload: usize,
 }
-type OpenVolumeFn = unsafe extern "efiapi" fn(*mut SimpleFileSystemProtocol, *mut *mut FileProtocol) -> Status;
+type OpenVolumeFn =
+    unsafe extern "efiapi" fn(*mut SimpleFileSystemProtocol, *mut *mut FileProtocol) -> Status;
 #[repr(C)]
 struct SimpleFileSystemProtocol {
     revision: u64,
     open_volume: Option<OpenVolumeFn>,
 }
-type FileOpenFn = unsafe extern "efiapi" fn(*mut FileProtocol, *mut *mut FileProtocol, *const u16, u64, u64) -> Status;
+type FileOpenFn = unsafe extern "efiapi" fn(
+    *mut FileProtocol,
+    *mut *mut FileProtocol,
+    *const u16,
+    u64,
+    u64,
+) -> Status;
 type FileCloseFn = unsafe extern "efiapi" fn(*mut FileProtocol) -> Status;
 type FileReadFn = unsafe extern "efiapi" fn(*mut FileProtocol, *mut usize, *mut c_void) -> Status;
-type FileGetInfoFn = unsafe extern "efiapi" fn(*mut FileProtocol, *const Guid, *mut usize, *mut c_void) -> Status;
+type FileGetInfoFn =
+    unsafe extern "efiapi" fn(*mut FileProtocol, *const Guid, *mut usize, *mut c_void) -> Status;
 #[repr(C)]
 struct FileProtocol {
     revision: u64,
@@ -133,13 +146,21 @@ fn is_error(status: Status) -> bool {
     status & EFI_ERROR_BIT != 0
 }
 
-unsafe fn protocol<T>(services: &BootServices, handle: Handle, guid: &Guid) -> Result<*mut T, Status> {
+unsafe fn protocol<T>(
+    services: &BootServices,
+    handle: Handle,
+    guid: &Guid,
+) -> Result<*mut T, Status> {
     let function = services.handle_protocol.ok_or(EFI_INVALID_PARAMETER)?;
     let mut interface = core::ptr::null_mut();
     // SAFETY: caller supplies a firmware handle and a valid protocol GUID.
     let status = unsafe { function(handle, guid, &mut interface) };
     if is_error(status) || interface.is_null() {
-        return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+        return Err(if is_error(status) {
+            status
+        } else {
+            EFI_INVALID_PARAMETER
+        });
     }
     Ok(interface.cast())
 }
@@ -149,7 +170,11 @@ unsafe fn allocate_pool(services: &BootServices, size: usize) -> Result<*mut c_v
     // SAFETY: firmware AllocatePool receives a valid output pointer.
     let status = unsafe { function(EFI_LOADER_DATA, size, &mut buffer) };
     if is_error(status) || buffer.is_null() {
-        return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+        return Err(if is_error(status) {
+            status
+        } else {
+            EFI_INVALID_PARAMETER
+        });
     }
     Ok(buffer)
 }
@@ -162,23 +187,32 @@ unsafe fn free_pool(services: &BootServices, buffer: *mut c_void) {
     }
 }
 
-unsafe fn read_kernel(services: &BootServices, image_handle: Handle) -> Result<(*mut u8, usize), Status> {
+unsafe fn read_kernel(
+    services: &BootServices,
+    image_handle: Handle,
+) -> Result<(*mut u8, usize), Status> {
     // SAFETY: protocol handle and GUID are supplied by UEFI.
-    let loaded = unsafe { protocol::<LoadedImageProtocol>(services, image_handle, &LOADED_IMAGE_GUID)? };
+    let loaded =
+        unsafe { protocol::<LoadedImageProtocol>(services, image_handle, &LOADED_IMAGE_GUID)? };
     // SAFETY: loaded-image protocol was returned successfully.
     let device = unsafe { (*loaded).device_handle };
     if device.is_null() {
         return Err(EFI_INVALID_PARAMETER);
     }
     // SAFETY: device handle belongs to the loaded image.
-    let filesystem = unsafe { protocol::<SimpleFileSystemProtocol>(services, device, &SIMPLE_FS_GUID)? };
+    let filesystem =
+        unsafe { protocol::<SimpleFileSystemProtocol>(services, device, &SIMPLE_FS_GUID)? };
     // SAFETY: protocol pointer is valid for the lifetime of boot services.
     let open_volume = unsafe { (*filesystem).open_volume }.ok_or(EFI_INVALID_PARAMETER)?;
     let mut root = core::ptr::null_mut();
     // SAFETY: open_volume writes the root directory handle on success.
     let status = unsafe { open_volume(filesystem, &mut root) };
     if is_error(status) || root.is_null() {
-        return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+        return Err(if is_error(status) {
+            status
+        } else {
+            EFI_INVALID_PARAMETER
+        });
     }
 
     let result = (|| {
@@ -188,7 +222,11 @@ unsafe fn read_kernel(services: &BootServices, image_handle: Handle) -> Result<(
         // SAFETY: path is NUL-terminated UTF-16 and output pointer is valid.
         let status = unsafe { open(root, &mut file, KERNEL_PATH.as_ptr(), EFI_FILE_MODE_READ, 0) };
         if is_error(status) || file.is_null() {
-            return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+            return Err(if is_error(status) {
+                status
+            } else {
+                EFI_INVALID_PARAMETER
+            });
         }
 
         let file_result = (|| {
@@ -196,9 +234,14 @@ unsafe fn read_kernel(services: &BootServices, image_handle: Handle) -> Result<(
             let get_info = unsafe { (*file).get_info }.ok_or(EFI_INVALID_PARAMETER)?;
             let mut info_size = 0usize;
             // SAFETY: null buffer requests the required EFI_FILE_INFO size.
-            let status = unsafe { get_info(file, &FILE_INFO_GUID, &mut info_size, core::ptr::null_mut()) };
+            let status =
+                unsafe { get_info(file, &FILE_INFO_GUID, &mut info_size, core::ptr::null_mut()) };
             if status != EFI_BUFFER_TOO_SMALL || info_size < 16 {
-                return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+                return Err(if is_error(status) {
+                    status
+                } else {
+                    EFI_INVALID_PARAMETER
+                });
             }
             // SAFETY: metadata buffer is allocated from the UEFI pool.
             let info = unsafe { allocate_pool(services, info_size)? };
@@ -211,7 +254,8 @@ unsafe fn read_kernel(services: &BootServices, image_handle: Handle) -> Result<(
             }
             // EFI_FILE_INFO.FileSize is the u64 at byte offset 8.
             // SAFETY: successful GetInfo returned at least the validated 16-byte structure.
-            let file_size_u64 = unsafe { core::ptr::read_unaligned((info as *const u8).add(8).cast::<u64>()) };
+            let file_size_u64 =
+                unsafe { core::ptr::read_unaligned((info as *const u8).add(8).cast::<u64>()) };
             // SAFETY: release metadata before allocating the image buffer.
             unsafe { free_pool(services, info) };
 
@@ -228,7 +272,11 @@ unsafe fn read_kernel(services: &BootServices, image_handle: Handle) -> Result<(
             if is_error(status) || read_size != file_size {
                 // SAFETY: image was allocated above.
                 unsafe { free_pool(services, image) };
-                return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+                return Err(if is_error(status) {
+                    status
+                } else {
+                    EFI_INVALID_PARAMETER
+                });
             }
             Ok((image.cast::<u8>(), file_size))
         })();
@@ -258,19 +306,30 @@ fn print_message(system_table: *mut SystemTable, message: &'static [u16]) -> Sta
     }
     // SAFETY: console pointer belongs to the supplied system table.
     let output = unsafe { (*console).output_string };
-    let Some(output) = output else { return EFI_INVALID_PARAMETER; };
+    let Some(output) = output else {
+        return EFI_INVALID_PARAMETER;
+    };
     // SAFETY: message is NUL-terminated UTF-16 and remains valid for the call.
     unsafe { output(console, message.as_ptr()) }
 }
 
 const START_MESSAGE: &[u16] = &[
-    0x0057,0x0069,0x0063,0x006f,0x0066,0x0065,0x0020,0x0042,0x006f,0x006f,0x0074,0x006c,0x006f,0x0061,0x0064,0x0065,0x0072,0x003a,0x0020,0x0055,0x0045,0x0046,0x0049,0x0020,0x0065,0x006e,0x0074,0x0072,0x0079,0x0020,0x0072,0x0065,0x0061,0x0063,0x0068,0x0065,0x0064,0x002e,0x000d,0x000a,0,
+    0x0057, 0x0069, 0x0063, 0x006f, 0x0066, 0x0065, 0x0020, 0x0042, 0x006f, 0x006f, 0x0074, 0x006c,
+    0x006f, 0x0061, 0x0064, 0x0065, 0x0072, 0x003a, 0x0020, 0x0055, 0x0045, 0x0046, 0x0049, 0x0020,
+    0x0065, 0x006e, 0x0074, 0x0072, 0x0079, 0x0020, 0x0072, 0x0065, 0x0061, 0x0063, 0x0068, 0x0065,
+    0x0064, 0x002e, 0x000d, 0x000a, 0,
 ];
 const VALID_MESSAGE: &[u16] = &[
-    0x004b,0x0045,0x0052,0x004e,0x0045,0x004c,0x002e,0x0045,0x004c,0x0046,0x0020,0x0072,0x0065,0x0061,0x0064,0x0020,0x0061,0x006e,0x0064,0x0020,0x0045,0x004c,0x0046,0x0036,0x0034,0x0020,0x0076,0x0061,0x006c,0x0069,0x0064,0x0061,0x0074,0x0065,0x0064,0x002e,0x000d,0x000a,0,
+    0x004b, 0x0045, 0x0052, 0x004e, 0x0045, 0x004c, 0x002e, 0x0045, 0x004c, 0x0046, 0x0020, 0x0072,
+    0x0065, 0x0061, 0x0064, 0x0020, 0x0061, 0x006e, 0x0064, 0x0020, 0x0045, 0x004c, 0x0046, 0x0036,
+    0x0034, 0x0020, 0x0076, 0x0061, 0x006c, 0x0069, 0x0064, 0x0061, 0x0074, 0x0065, 0x0064, 0x002e,
+    0x000d, 0x000a, 0,
 ];
 const ERROR_MESSAGE: &[u16] = &[
-    0x0057,0x0042,0x004c,0x003a,0x0020,0x006b,0x0065,0x0072,0x006e,0x0065,0x006c,0x0020,0x006c,0x006f,0x0061,0x0064,0x0020,0x006f,0x0072,0x0020,0x0045,0x004c,0x0046,0x0020,0x0076,0x0061,0x006c,0x0069,0x0064,0x0061,0x0074,0x0069,0x006f,0x006e,0x0020,0x0066,0x0061,0x0069,0x006c,0x0065,0x0064,0x002e,0x000d,0x000a,0,
+    0x0057, 0x0042, 0x004c, 0x003a, 0x0020, 0x006b, 0x0065, 0x0072, 0x006e, 0x0065, 0x006c, 0x0020,
+    0x006c, 0x006f, 0x0061, 0x0064, 0x0020, 0x006f, 0x0072, 0x0020, 0x0045, 0x004c, 0x0046, 0x0020,
+    0x0076, 0x0061, 0x006c, 0x0069, 0x0064, 0x0061, 0x0074, 0x0069, 0x006f, 0x006e, 0x0020, 0x0066,
+    0x0061, 0x0069, 0x006c, 0x0065, 0x0064, 0x002e, 0x000d, 0x000a, 0,
 ];
 
 #[unsafe(no_mangle)]
@@ -301,7 +360,10 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
 
     // SAFETY: image is a live buffer of image_size bytes allocated by UEFI.
     let parsed = unsafe {
-        ElfImage::parse(core::slice::from_raw_parts(image, image_size), expected_machine)
+        ElfImage::parse(
+            core::slice::from_raw_parts(image, image_size),
+            expected_machine,
+        )
     };
     // SAFETY: release the file buffer after validation; no pointer into it is retained.
     unsafe { free_pool(&*boot_services, image.cast()) };
