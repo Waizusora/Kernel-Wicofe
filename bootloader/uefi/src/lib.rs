@@ -387,6 +387,199 @@ pub fn plan_combined_page_mappings(
     Ok(kernel_mappings.len() + identity_count)
 }
 
+/// PE/COFF image-section mapping errors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeMappingError {
+    InvalidImage,
+    UnsupportedMachine,
+    InvalidOptionalHeader,
+    InvalidSectionTable,
+    InvalidSection,
+    UnsupportedPermissions,
+    AddressOverflow,
+    OutputTooSmall,
+    OverlappingSections,
+}
+
+const PE_PAGE_SIZE: u64 = UEFI_PAGE_SIZE;
+const PE_MACHINE_X86_64: u16 = 0x8664;
+const PE_MACHINE_AARCH64: u16 = 0xaa64;
+const PE_IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+const PE_IMAGE_SCN_MEM_READ: u32 = 0x4000_0000;
+const PE_IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
+const PE_MAX_SECTIONS: usize = 96;
+
+fn pe_read_u16(image: &[u8], offset: usize) -> Result<u16, PeMappingError> {
+    let bytes = image
+        .get(offset..offset.checked_add(2).ok_or(PeMappingError::AddressOverflow)?)
+        .ok_or(PeMappingError::InvalidImage)?;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+fn pe_read_u32(image: &[u8], offset: usize) -> Result<u32, PeMappingError> {
+    let bytes = image
+        .get(offset..offset.checked_add(4).ok_or(PeMappingError::AddressOverflow)?)
+        .ok_or(PeMappingError::InvalidImage)?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// Build identity mappings for a loaded PE32+ image, preserving section
+/// read/write/execute permissions. The caller must supply the firmware-loaded
+/// image base and a slice spanning the complete SizeOfImage allocation.
+pub fn plan_pe_identity_mappings(
+    image_base: u64,
+    image: &[u8],
+    output: &mut [KernelPageMapping],
+) -> Result<usize, PeMappingError> {
+    if image_base == 0 || image_base % PE_PAGE_SIZE != 0 || image.len() < 0x40 {
+        return Err(PeMappingError::InvalidImage);
+    }
+    if image.get(0..2) != Some(b"MZ") {
+        return Err(PeMappingError::InvalidImage);
+    }
+
+    let pe_offset = usize::try_from(pe_read_u32(image, 0x3c)?)
+        .map_err(|_| PeMappingError::AddressOverflow)?;
+    let signature_end = pe_offset
+        .checked_add(4)
+        .ok_or(PeMappingError::AddressOverflow)?;
+    if image.get(pe_offset..signature_end) != Some(b"PE\0\0") {
+        return Err(PeMappingError::InvalidImage);
+    }
+
+    let coff = signature_end;
+    let machine = pe_read_u16(image, coff)?;
+    let expected_machine = if cfg!(target_arch = "x86_64") {
+        PE_MACHINE_X86_64
+    } else {
+        PE_MACHINE_AARCH64
+    };
+    if machine != expected_machine {
+        return Err(PeMappingError::UnsupportedMachine);
+    }
+    let section_count = usize::from(pe_read_u16(image, coff + 2)?);
+    let optional_size = usize::from(pe_read_u16(image, coff + 16)?);
+    if section_count == 0 || section_count > PE_MAX_SECTIONS {
+        return Err(PeMappingError::InvalidSectionTable);
+    }
+
+    let optional = coff
+        .checked_add(20)
+        .ok_or(PeMappingError::AddressOverflow)?;
+    let optional_end = optional
+        .checked_add(optional_size)
+        .ok_or(PeMappingError::AddressOverflow)?;
+    if optional_size < 64 || optional_end > image.len() || pe_read_u16(image, optional)? != 0x20b {
+        return Err(PeMappingError::InvalidOptionalHeader);
+    }
+    let size_of_image = usize::try_from(pe_read_u32(image, optional + 56)?)
+        .map_err(|_| PeMappingError::AddressOverflow)?;
+    let size_of_headers = usize::try_from(pe_read_u32(image, optional + 60)?)
+        .map_err(|_| PeMappingError::AddressOverflow)?;
+    if size_of_image == 0
+        || size_of_image > image.len()
+        || size_of_image as u64 % PE_PAGE_SIZE != 0
+        || size_of_headers == 0
+        || size_of_headers > size_of_image
+    {
+        return Err(PeMappingError::InvalidImage);
+    }
+    image_base
+        .checked_add(size_of_image as u64)
+        .ok_or(PeMappingError::AddressOverflow)?;
+
+    let section_table_size = section_count
+        .checked_mul(40)
+        .ok_or(PeMappingError::AddressOverflow)?;
+    let section_table_end = optional_end
+        .checked_add(section_table_size)
+        .ok_or(PeMappingError::AddressOverflow)?;
+    if section_table_end > size_of_headers || section_table_end > image.len() {
+        return Err(PeMappingError::InvalidSectionTable);
+    }
+
+    if output.len() < section_count + 1 {
+        return Err(PeMappingError::OutputTooSmall);
+    }
+
+    let mut count = 0usize;
+    let header_pages = size_of_headers
+        .checked_add(PE_PAGE_SIZE as usize - 1)
+        .ok_or(PeMappingError::AddressOverflow)?
+        / PE_PAGE_SIZE as usize;
+    output[count] = KernelPageMapping {
+        physical_start: image_base,
+        virtual_start: image_base,
+        page_count: header_pages as u64,
+        permissions: MAP_READ,
+    };
+    count += 1;
+    let header_end = (header_pages as u64)
+        .checked_mul(PE_PAGE_SIZE)
+        .ok_or(PeMappingError::AddressOverflow)?;
+
+    for index in 0..section_count {
+        let section = optional_end
+            .checked_add(index.checked_mul(40).ok_or(PeMappingError::AddressOverflow)?)
+            .ok_or(PeMappingError::AddressOverflow)?;
+        let virtual_size = u64::from(pe_read_u32(image, section + 8)?);
+        let virtual_address = u64::from(pe_read_u32(image, section + 12)?);
+        let raw_size = u64::from(pe_read_u32(image, section + 16)?);
+        let span = virtual_size.max(raw_size);
+        if span == 0 {
+            continue;
+        }
+        let end = virtual_address
+            .checked_add(span)
+            .ok_or(PeMappingError::AddressOverflow)?;
+        if virtual_address < header_end || end > size_of_image as u64 {
+            return Err(PeMappingError::InvalidSection);
+        }
+        let page_start = virtual_address & !(PE_PAGE_SIZE - 1);
+        let page_end = end
+            .checked_add(PE_PAGE_SIZE - 1)
+            .ok_or(PeMappingError::AddressOverflow)?
+            & !(PE_PAGE_SIZE - 1);
+        let characteristics = pe_read_u32(image, section + 36)?;
+        let writable = characteristics & PE_IMAGE_SCN_MEM_WRITE != 0;
+        let executable = characteristics & PE_IMAGE_SCN_MEM_EXECUTE != 0;
+        let readable = characteristics & PE_IMAGE_SCN_MEM_READ != 0;
+        if !readable || (writable && executable) {
+            return Err(PeMappingError::UnsupportedPermissions);
+        }
+        for previous in &output[..count] {
+            let previous_end = previous
+                .virtual_start
+                .checked_add(
+                    previous
+                        .page_count
+                        .checked_mul(PE_PAGE_SIZE)
+                        .ok_or(PeMappingError::AddressOverflow)?,
+                )
+                .ok_or(PeMappingError::AddressOverflow)?;
+            if page_start + image_base < previous_end
+                && previous.virtual_start < page_end + image_base
+            {
+                return Err(PeMappingError::OverlappingSections);
+            }
+        }
+        let physical_start = image_base
+            .checked_add(page_start)
+            .ok_or(PeMappingError::AddressOverflow)?;
+        output[count] = KernelPageMapping {
+            physical_start,
+            virtual_start: physical_start,
+            page_count: (page_end - page_start) / PE_PAGE_SIZE,
+            permissions: MAP_READ
+                | if writable { MAP_WRITE } else { 0 }
+                | if executable { MAP_EXECUTE } else { 0 },
+        };
+        count += 1;
+    }
+
+    Ok(count)
+}
+
 /// UEFI removable-media fallback path for x86-64 firmware.
 pub const X86_64_FALLBACK_PATH: &str = r"\EFI\BOOT\BOOTX64.EFI";
 
@@ -626,6 +819,101 @@ mod tests {
         assert_eq!(output[0].page_count, 2);
         assert!(!output[0].writable);
         assert!(output[0].executable);
+    }
+
+    fn synthetic_pe_image() -> [u8; 0x5000] {
+        let mut image = [0u8; 0x5000];
+        image[0..2].copy_from_slice(b"MZ");
+        image[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        image[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let coff = 0x84;
+        let machine = if cfg!(target_arch = "x86_64") {
+            PE_MACHINE_X86_64
+        } else {
+            PE_MACHINE_AARCH64
+        };
+        image[coff..coff + 2].copy_from_slice(&machine.to_le_bytes());
+        image[coff + 2..coff + 4].copy_from_slice(&2u16.to_le_bytes());
+        image[coff + 16..coff + 18].copy_from_slice(&0xf0u16.to_le_bytes());
+        let optional = coff + 20;
+        image[optional..optional + 2].copy_from_slice(&0x20bu16.to_le_bytes());
+        image[optional + 56..optional + 60].copy_from_slice(&0x5000u32.to_le_bytes());
+        image[optional + 60..optional + 64].copy_from_slice(&0x1000u32.to_le_bytes());
+        let sections = optional + 0xf0;
+        image[sections + 8..sections + 12].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[sections + 12..sections + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[sections + 36..sections + 40]
+            .copy_from_slice(&(PE_IMAGE_SCN_MEM_READ | PE_IMAGE_SCN_MEM_EXECUTE).to_le_bytes());
+        let data = sections + 40;
+        image[data + 8..data + 12].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[data + 12..data + 16].copy_from_slice(&0x2000u32.to_le_bytes());
+        image[data + 36..data + 40]
+            .copy_from_slice(&(PE_IMAGE_SCN_MEM_READ | PE_IMAGE_SCN_MEM_WRITE).to_le_bytes());
+        image
+    }
+
+    #[test]
+    fn pe_identity_mapping_preserves_header_text_and_data_permissions() {
+        let image = synthetic_pe_image();
+        let mut mappings = [KernelPageMapping::default(); 3];
+        assert_eq!(
+            plan_pe_identity_mappings(0x10_0000, &image, &mut mappings),
+            Ok(3)
+        );
+        assert_eq!(mappings[0].physical_start, 0x10_0000);
+        assert_eq!(mappings[0].permissions, MAP_READ);
+        assert_eq!(mappings[1].physical_start, 0x10_1000);
+        assert_eq!(mappings[1].permissions, MAP_READ | MAP_EXECUTE);
+        assert_eq!(mappings[2].physical_start, 0x10_2000);
+        assert_eq!(mappings[2].permissions, MAP_READ | MAP_WRITE);
+    }
+
+    #[test]
+    fn pe_identity_mapping_rejects_wx_shared_pages_and_small_output() {
+        let mut image = synthetic_pe_image();
+        let mut mappings = [KernelPageMapping::default(); 3];
+        let sections = 0x80 + 4 + 20 + 0xf0;
+        image[sections + 36..sections + 40].copy_from_slice(
+            &(PE_IMAGE_SCN_MEM_READ | PE_IMAGE_SCN_MEM_WRITE | PE_IMAGE_SCN_MEM_EXECUTE)
+                .to_le_bytes(),
+        );
+        assert_eq!(
+            plan_pe_identity_mappings(0x10_0000, &image, &mut mappings),
+            Err(PeMappingError::UnsupportedPermissions)
+        );
+
+        image = synthetic_pe_image();
+        image[sections + 40 + 12..sections + 40 + 16]
+            .copy_from_slice(&0x1800u32.to_le_bytes());
+        assert_eq!(
+            plan_pe_identity_mappings(0x10_0000, &image, &mut mappings),
+            Err(PeMappingError::OverlappingSections)
+        );
+        assert_eq!(
+            plan_pe_identity_mappings(0x10_0000, &image, &mut mappings[..2]),
+            Err(PeMappingError::OutputTooSmall)
+        );
+    }
+
+    #[test]
+    fn pe_identity_mapping_rejects_invalid_headers_and_wrong_machine() {
+        let mut image = synthetic_pe_image();
+        image[0..2].copy_from_slice(b"NO");
+        assert_eq!(
+            plan_pe_identity_mappings(0x10_0000, &image, &mut [KernelPageMapping::default(); 3]),
+            Err(PeMappingError::InvalidImage)
+        );
+        image = synthetic_pe_image();
+        let wrong_machine = if cfg!(target_arch = "x86_64") {
+            PE_MACHINE_AARCH64
+        } else {
+            PE_MACHINE_X86_64
+        };
+        image[0x84..0x86].copy_from_slice(&wrong_machine.to_le_bytes());
+        assert_eq!(
+            plan_pe_identity_mappings(0x10_0000, &image, &mut [KernelPageMapping::default(); 3]),
+            Err(PeMappingError::UnsupportedMachine)
+        );
     }
 
     #[test]
