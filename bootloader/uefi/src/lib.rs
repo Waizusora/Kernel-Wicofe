@@ -40,6 +40,35 @@ pub fn kernel_allocation_layout(image_size: u64) -> Option<KernelAllocationLayou
     })
 }
 
+
+/// Page-table backing-store requirements for a contiguous UEFI allocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageTableAllocationLayout {
+    pub table_count: usize,
+    pub allocation_size: u64,
+    pub allocation_pages: usize,
+}
+
+/// Calculate the exact number of UEFI pages required for a table pool.
+///
+/// Each architecture builder uses one 4 KiB physical page per translation
+/// table. The caller must still validate the physical address range against
+/// the architecture's output-address constraints.
+pub fn page_table_allocation_layout(table_count: usize) -> Option<PageTableAllocationLayout> {
+    if table_count == 0 {
+        return None;
+    }
+
+    let allocation_size = u64::try_from(table_count)
+        .ok()?
+        .checked_mul(UEFI_PAGE_SIZE)?;
+    Some(PageTableAllocationLayout {
+        table_count,
+        allocation_size,
+        allocation_pages: table_count,
+    })
+}
+
 /// Hardware-independent permission bits for a 4 KiB kernel mapping.
 pub const MAP_READ: u32 = 1 << 0;
 pub const MAP_WRITE: u32 = 1 << 1;
