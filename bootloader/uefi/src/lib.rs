@@ -263,25 +263,37 @@ pub fn plan_identity_page_mappings(
 ) -> Result<usize, IdentityMappingError> {
     let mut count = 0usize;
     for range in ranges {
-        if range.length == 0 { return Err(IdentityMappingError::InvalidRange); }
+        if range.length == 0 {
+            return Err(IdentityMappingError::InvalidRange);
+        }
         let (writable, executable) = mapping_access(range.permissions)
             .map_err(|_| IdentityMappingError::UnsupportedPermissions)?;
-        let end = range.physical_start.checked_add(range.length)
+        let end = range
+            .physical_start
+            .checked_add(range.length)
             .ok_or(IdentityMappingError::AddressOverflow)?;
         let page_start = range.physical_start & !(UEFI_PAGE_SIZE - 1);
-        let page_end = end.checked_add(UEFI_PAGE_SIZE - 1)
-            .ok_or(IdentityMappingError::AddressOverflow)? & !(UEFI_PAGE_SIZE - 1);
+        let page_end = end
+            .checked_add(UEFI_PAGE_SIZE - 1)
+            .ok_or(IdentityMappingError::AddressOverflow)?
+            & !(UEFI_PAGE_SIZE - 1);
         let page_count = (page_end - page_start) / UEFI_PAGE_SIZE;
         for previous in &output[..count] {
-            let previous_size = previous.page_count.checked_mul(UEFI_PAGE_SIZE)
+            let previous_size = previous
+                .page_count
+                .checked_mul(UEFI_PAGE_SIZE)
                 .ok_or(IdentityMappingError::AddressOverflow)?;
-            let previous_end = previous.virtual_start.checked_add(previous_size)
+            let previous_end = previous
+                .virtual_start
+                .checked_add(previous_size)
                 .ok_or(IdentityMappingError::AddressOverflow)?;
             if page_start < previous_end && previous.virtual_start < page_end {
                 return Err(IdentityMappingError::OverlappingRange);
             }
         }
-        if count == output.len() { return Err(IdentityMappingError::OutputTooSmall); }
+        if count == output.len() {
+            return Err(IdentityMappingError::OutputTooSmall);
+        }
         output[count] = KernelPageMapping {
             physical_start: page_start,
             virtual_start: page_start,
@@ -318,7 +330,11 @@ mod tests {
 
     #[test]
     fn identity_mapping_planner_rounds_ranges_and_preserves_permissions() {
-        let ranges = [IdentityMappingRange { physical_start: 0x10_0123, length: 0x1800, permissions: MAP_READ | MAP_EXECUTE }];
+        let ranges = [IdentityMappingRange {
+            physical_start: 0x10_0123,
+            length: 0x1800,
+            permissions: MAP_READ | MAP_EXECUTE,
+        }];
         let mut output = [KernelPageMapping::default(); 1];
         assert_eq!(plan_identity_page_mappings(&ranges, &mut output), Ok(1));
         assert_eq!(output[0].physical_start, 0x10_0000);
@@ -331,25 +347,68 @@ mod tests {
     fn identity_mapping_planner_rejects_overlap_wx_and_overflow() {
         let mut output = [KernelPageMapping::default(); 2];
         let overlap = [
-            IdentityMappingRange { physical_start: 0x20_0000, length: 0x1800, permissions: MAP_READ },
-            IdentityMappingRange { physical_start: 0x20_1000, length: 0x1000, permissions: MAP_READ },
+            IdentityMappingRange {
+                physical_start: 0x20_0000,
+                length: 0x1800,
+                permissions: MAP_READ,
+            },
+            IdentityMappingRange {
+                physical_start: 0x20_1000,
+                length: 0x1000,
+                permissions: MAP_READ,
+            },
         ];
-        assert_eq!(plan_identity_page_mappings(&overlap, &mut output), Err(IdentityMappingError::OverlappingRange));
-        let wx = [IdentityMappingRange { physical_start: 0x30_0000, length: 0x1000, permissions: MAP_READ | MAP_WRITE | MAP_EXECUTE }];
-        assert_eq!(plan_identity_page_mappings(&wx, &mut output), Err(IdentityMappingError::UnsupportedPermissions));
-        let overflow = [IdentityMappingRange { physical_start: u64::MAX - 0xfff, length: 0x2000, permissions: MAP_READ }];
-        assert_eq!(plan_identity_page_mappings(&overflow, &mut output), Err(IdentityMappingError::AddressOverflow));
+        assert_eq!(
+            plan_identity_page_mappings(&overlap, &mut output),
+            Err(IdentityMappingError::OverlappingRange)
+        );
+        let wx = [IdentityMappingRange {
+            physical_start: 0x30_0000,
+            length: 0x1000,
+            permissions: MAP_READ | MAP_WRITE | MAP_EXECUTE,
+        }];
+        assert_eq!(
+            plan_identity_page_mappings(&wx, &mut output),
+            Err(IdentityMappingError::UnsupportedPermissions)
+        );
+        let overflow = [IdentityMappingRange {
+            physical_start: u64::MAX - 0xfff,
+            length: 0x2000,
+            permissions: MAP_READ,
+        }];
+        assert_eq!(
+            plan_identity_page_mappings(&overflow, &mut output),
+            Err(IdentityMappingError::AddressOverflow)
+        );
     }
 
     #[test]
     fn identity_mapping_planner_rejects_empty_ranges_and_small_output() {
-        let empty = [IdentityMappingRange { physical_start: 0x40_0000, length: 0, permissions: MAP_READ }];
-        assert_eq!(plan_identity_page_mappings(&empty, &mut []), Err(IdentityMappingError::InvalidRange));
+        let empty = [IdentityMappingRange {
+            physical_start: 0x40_0000,
+            length: 0,
+            permissions: MAP_READ,
+        }];
+        assert_eq!(
+            plan_identity_page_mappings(&empty, &mut []),
+            Err(IdentityMappingError::InvalidRange)
+        );
         let two = [
-            IdentityMappingRange { physical_start: 0x50_0000, length: 0x1000, permissions: MAP_READ },
-            IdentityMappingRange { physical_start: 0x60_0000, length: 0x1000, permissions: MAP_READ },
+            IdentityMappingRange {
+                physical_start: 0x50_0000,
+                length: 0x1000,
+                permissions: MAP_READ,
+            },
+            IdentityMappingRange {
+                physical_start: 0x60_0000,
+                length: 0x1000,
+                permissions: MAP_READ,
+            },
         ];
-        assert_eq!(plan_identity_page_mappings(&two, &mut [KernelPageMapping::default(); 1]), Err(IdentityMappingError::OutputTooSmall));
+        assert_eq!(
+            plan_identity_page_mappings(&two, &mut [KernelPageMapping::default(); 1]),
+            Err(IdentityMappingError::OutputTooSmall)
+        );
     }
 
     #[test]
