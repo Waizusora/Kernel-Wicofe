@@ -515,6 +515,10 @@ unsafe fn build_architecture_page_tables(
                 if (table_pointer as usize) % core::mem::align_of::<[u64; 512]>() != 0 {
                     return Err(EFI_INVALID_PARAMETER);
                 }
+                // UEFI page allocations are dedicated to this pool; explicitly clear every
+                // table page so all unused descriptors are guaranteed invalid.
+                // SAFETY: table_pointer spans table_count writable, page-aligned pages.
+                unsafe { core::ptr::write_bytes(table_pointer, 0, table_count) };
                 // SAFETY: UEFI allocated table_count contiguous, page-aligned pages.
                 let tables = unsafe { core::slice::from_raw_parts_mut(table_pointer, table_count) };
                 // SAFETY: addresses contains the physical address of each table page.
@@ -588,6 +592,10 @@ unsafe fn build_architecture_page_tables(
                 if (table_pointer as usize) % core::mem::align_of::<[u64; 512]>() != 0 {
                     return Err(EFI_INVALID_PARAMETER);
                 }
+                // UEFI page allocations are dedicated to this pool; explicitly clear every
+                // table page so all unused descriptors are guaranteed invalid.
+                // SAFETY: table_pointer spans table_count writable, page-aligned pages.
+                unsafe { core::ptr::write_bytes(table_pointer, 0, table_count) };
                 // SAFETY: UEFI allocated table_count contiguous, page-aligned pages.
                 let tables = unsafe { core::slice::from_raw_parts_mut(table_pointer, table_count) };
                 // SAFETY: addresses contains the physical address of each table page.
