@@ -29,6 +29,7 @@ const EFI_BUFFER_TOO_SMALL: Status = EFI_ERROR_BIT | 5;
 const EFI_INVALID_PARAMETER: Status = EFI_ERROR_BIT | 2;
 const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 const MAX_MEMORY_MAP_ATTEMPTS: usize = 4;
+const MEMORY_MAP_DESCRIPTOR_SLACK: usize = 32;
 const EFI_LOADER_DATA: u32 = 2;
 const EFI_FILE_MODE_READ: u64 = 1;
 const MAX_KERNEL_SIZE: usize = 64 * 1024 * 1024;
@@ -216,8 +217,11 @@ struct PreparedBootInfo {
     info: *mut BootInfo,
     regions: *mut MemoryRegion,
     region_count: usize,
-    _raw_map: *mut c_void,
-    _descriptors: *mut UefiMemoryDescriptor,
+    raw_map: *mut c_void,
+    raw_map_capacity: usize,
+    descriptors: *mut UefiMemoryDescriptor,
+    descriptor_capacity: usize,
+    map_key: usize,
 }
 
 /// Allocate all storage first, then take and translate the final map without
@@ -258,7 +262,7 @@ unsafe fn prepare_boot_info(
     let mut capacity = required_size
         .checked_add(
             descriptor_size
-                .checked_mul(8)
+                .checked_mul(MEMORY_MAP_DESCRIPTOR_SLACK)
                 .ok_or(EFI_INVALID_PARAMETER)?,
         )
         .ok_or(EFI_INVALID_PARAMETER)?;
@@ -326,7 +330,7 @@ unsafe fn prepare_boot_info(
             capacity = map_size
                 .checked_add(
                     descriptor_size
-                        .checked_mul(8)
+                        .checked_mul(MEMORY_MAP_DESCRIPTOR_SLACK)
                         .ok_or(EFI_INVALID_PARAMETER)?,
                 )
                 .ok_or(EFI_INVALID_PARAMETER)?;
@@ -420,12 +424,100 @@ unsafe fn prepare_boot_info(
             info,
             regions,
             region_count,
-            _raw_map: raw_map,
-            _descriptors: descriptors,
+            raw_map,
+            raw_map_capacity: capacity,
+            descriptors,
+            descriptor_capacity,
+            map_key,
         });
     }
 
     Err(EFI_BUFFER_TOO_SMALL)
+}
+
+
+/// Refresh the retained canonical map and capture a new firmware map key.
+///
+/// This function performs no allocation and makes no firmware calls after
+/// GetMemoryMap. Call it immediately before ExitBootServices; any intervening
+/// Boot Services call may invalidate the returned key.
+unsafe fn refresh_prepared_boot_info(
+    services: &BootServices,
+    prepared: &mut PreparedBootInfo,
+) -> Result<(), Status> {
+    let get_memory_map = services.get_memory_map.ok_or(EFI_INVALID_PARAMETER)?;
+    let mut map_size = prepared.raw_map_capacity;
+    let mut map_key = 0usize;
+    let mut descriptor_size = 0usize;
+    let mut descriptor_version = 0u32;
+
+    // SAFETY: the retained raw map allocation spans raw_map_capacity bytes.
+    let status = unsafe {
+        get_memory_map(
+            &mut map_size,
+            prepared.raw_map,
+            &mut map_key,
+            &mut descriptor_size,
+            &mut descriptor_version,
+        )
+    };
+    if is_error(status) {
+        return Err(status);
+    }
+    if map_size == 0
+        || map_size > prepared.raw_map_capacity
+        || descriptor_size < 40
+        || descriptor_size % 8 != 0
+        || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
+        || map_size % descriptor_size != 0
+    {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+
+    let descriptor_count = map_size / descriptor_size;
+    if descriptor_count > prepared.descriptor_capacity {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+
+    // SAFETY: firmware wrote exactly map_size bytes into the retained buffer.
+    let raw_bytes = unsafe {
+        core::slice::from_raw_parts(prepared.raw_map.cast::<u8>(), map_size)
+    };
+    // SAFETY: descriptor storage has descriptor_capacity aligned entries.
+    let descriptor_output = unsafe {
+        core::slice::from_raw_parts_mut(prepared.descriptors, prepared.descriptor_capacity)
+    };
+    let decoded_count =
+        decode_uefi_memory_descriptors(raw_bytes, descriptor_size, descriptor_output)
+            .map_err(|_| EFI_INVALID_PARAMETER)?;
+    if decoded_count != descriptor_count {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+
+    // SAFETY: decoder initialized exactly descriptor_count entries.
+    let decoded = unsafe {
+        core::slice::from_raw_parts(prepared.descriptors, decoded_count)
+    };
+    // SAFETY: region storage has descriptor_capacity writable entries.
+    let region_output = unsafe {
+        core::slice::from_raw_parts_mut(prepared.regions, prepared.descriptor_capacity)
+    };
+    let region_count = translate_uefi_memory_map(decoded, region_output)
+        .ok()
+        .filter(|count| *count != 0)
+        .ok_or(EFI_INVALID_PARAMETER)?;
+
+    // SAFETY: info points to the retained, aligned BootInfo allocation.
+    let boot_info = unsafe { &mut *prepared.info };
+    boot_info.memory_map_address = prepared.regions as u64;
+    boot_info.memory_map_entries = region_count as u64;
+    // SAFETY: the translated region slice contains region_count initialized entries.
+    let map = unsafe { core::slice::from_raw_parts(prepared.regions, region_count) };
+    validate_boot_info(boot_info, map).map_err(|_| EFI_INVALID_PARAMETER)?;
+
+    prepared.region_count = region_count;
+    prepared.map_key = map_key;
+    Ok(())
 }
 
 unsafe fn read_kernel(
@@ -1064,7 +1156,14 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
                 tables.root_physical_address,
                 tables.used_table_count,
             );
-            print_message(system_table, LOADED_MESSAGE)
+            let console_status = print_message(system_table, LOADED_MESSAGE);
+            // SAFETY: all storage is retained; this refresh performs no allocation.
+            if let Err(status) =
+                unsafe { refresh_prepared_boot_info(&*boot_services, &mut {prepared}) }
+            {
+                return status;
+            }
+            console_status
         }
         Err(_) => {
             let _ = print_message(system_table, ERROR_MESSAGE);
