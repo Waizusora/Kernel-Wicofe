@@ -4,7 +4,7 @@
 use core::ffi::c_void;
 use core::panic::PanicInfo;
 use wicofe_bootloader_common::{
-    BootInfo, MemoryRegion, architecture, validate_boot_info, BOOT_INFO_MAGIC, BOOT_INFO_VERSION,
+    BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BootInfo, MemoryRegion, architecture, validate_boot_info,
 };
 #[cfg(target_arch = "aarch64")]
 use wicofe_bootloader_elf::EM_AARCH64;
@@ -248,11 +248,19 @@ unsafe fn prepare_boot_info(
         || descriptor_size % 8 != 0
         || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
     {
-        return Err(if is_error(status) { status } else { EFI_INVALID_PARAMETER });
+        return Err(if is_error(status) {
+            status
+        } else {
+            EFI_INVALID_PARAMETER
+        });
     }
 
     let mut capacity = required_size
-        .checked_add(descriptor_size.checked_mul(8).ok_or(EFI_INVALID_PARAMETER)?)
+        .checked_add(
+            descriptor_size
+                .checked_mul(8)
+                .ok_or(EFI_INVALID_PARAMETER)?,
+        )
         .ok_or(EFI_INVALID_PARAMETER)?;
 
     for _ in 0..MAX_MEMORY_MAP_ATTEMPTS {
@@ -316,7 +324,11 @@ unsafe fn prepare_boot_info(
                 return Err(EFI_INVALID_PARAMETER);
             }
             capacity = map_size
-                .checked_add(descriptor_size.checked_mul(8).ok_or(EFI_INVALID_PARAMETER)?)
+                .checked_add(
+                    descriptor_size
+                        .checked_mul(8)
+                        .ok_or(EFI_INVALID_PARAMETER)?,
+                )
                 .ok_or(EFI_INVALID_PARAMETER)?;
             continue;
         }
@@ -345,14 +357,9 @@ unsafe fn prepare_boot_info(
         // SAFETY: firmware wrote map_size bytes into raw_map.
         let raw_bytes = unsafe { core::slice::from_raw_parts(raw_map.cast::<u8>(), map_size) };
         // SAFETY: descriptors and regions each have descriptor_capacity aligned entries.
-        let decoded = unsafe {
-            core::slice::from_raw_parts_mut(descriptors, descriptor_capacity)
-        };
-        let decoded_count = match decode_uefi_memory_descriptors(
-            raw_bytes,
-            descriptor_size,
-            decoded,
-        ) {
+        let decoded = unsafe { core::slice::from_raw_parts_mut(descriptors, descriptor_capacity) };
+        let decoded_count =
+            match decode_uefi_memory_descriptors(raw_bytes, descriptor_size, decoded) {
             Ok(count) if count == descriptor_count => count,
             _ => {
                 unsafe { free_pool(services, info.cast()) };
