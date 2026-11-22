@@ -7,15 +7,15 @@ use core::panic::PanicInfo;
 use wicofe_bootloader_elf::EM_AARCH64;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_elf::EM_X86_64;
+#[cfg(target_arch = "aarch64")]
+use wicofe_bootloader_uefi::convert_kernel_page_mappings;
+#[cfg(target_arch = "x86_64")]
+use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_elf::{ElfImage, LoadSegment};
 use wicofe_bootloader_uefi::{
     KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, UEFI_PAGE_SIZE, kernel_allocation_layout,
     page_table_allocation_layout, plan_kernel_page_mappings,
 };
-#[cfg(target_arch = "aarch64")]
-use wicofe_bootloader_uefi::convert_kernel_page_mappings;
-#[cfg(target_arch = "x86_64")]
-use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 
 type Status = usize;
 type Handle = *mut c_void;
@@ -481,45 +481,42 @@ unsafe fn build_architecture_page_tables(
     services: &BootServices,
     mappings: &[KernelPageMapping],
 ) -> Result<PreparedPageTables, Status> {
-    let architecture_mappings =
-        unsafe { allocate_array::<wicofe_kernel_x86_64::paging::PageMapping>(services, mappings.len())? };
+    let architecture_mappings = unsafe {
+        allocate_array::<wicofe_kernel_x86_64::paging::PageMapping>(services, mappings.len())?
+    };
     let result = (|| {
         // SAFETY: architecture_mappings contains mappings.len() aligned writable entries.
-        let output = unsafe {
-            core::slice::from_raw_parts_mut(architecture_mappings, mappings.len())
-        };
+        let output =
+            unsafe { core::slice::from_raw_parts_mut(architecture_mappings, mappings.len()) };
         convert_kernel_page_mappings(mappings, output).map_err(|_| EFI_INVALID_PARAMETER)?;
-        let converted = unsafe {
-            core::slice::from_raw_parts(architecture_mappings, mappings.len())
-        };
-        let table_count =
-            wicofe_kernel_x86_64::paging::required_table_capacity(converted)
-                .map_err(|_| EFI_INVALID_PARAMETER)?;
+        let converted =
+            unsafe { core::slice::from_raw_parts(architecture_mappings, mappings.len()) };
+        let table_count = wicofe_kernel_x86_64::paging::required_table_capacity(converted)
+            .map_err(|_| EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
         let build_result = (|| {
-            let addresses =
-                unsafe { allocate_array::<u64>(services, table_count)? };
+            let addresses = unsafe { allocate_array::<u64>(services, table_count)? };
             let address_result = (|| {
                 for index in 0..table_count {
                     let offset = u64::try_from(index)
                         .ok()
                         .and_then(|value| value.checked_mul(UEFI_PAGE_SIZE))
                         .ok_or(EFI_INVALID_PARAMETER)?;
-                    let address = table_base.checked_add(offset).ok_or(EFI_INVALID_PARAMETER)?;
+                    let address = table_base
+                        .checked_add(offset)
+                        .ok_or(EFI_INVALID_PARAMETER)?;
                     // SAFETY: addresses points to table_count initialized allocation slots.
                     unsafe { addresses.add(index).write(address) };
                 }
-                let table_pointer =
-                    usize::try_from(table_base).map_err(|_| EFI_INVALID_PARAMETER)?
-                        as *mut [u64; 512];
+                let table_pointer = usize::try_from(table_base)
+                    .map_err(|_| EFI_INVALID_PARAMETER)?
+                    as *mut [u64; 512];
                 if (table_pointer as usize) % core::mem::align_of::<[u64; 512]>() != 0 {
                     return Err(EFI_INVALID_PARAMETER);
                 }
                 // SAFETY: UEFI allocated table_count contiguous, page-aligned pages.
-                let tables = unsafe {
-                    core::slice::from_raw_parts_mut(table_pointer, table_count)
-                };
+                let tables = unsafe { core::slice::from_raw_parts_mut(table_pointer, table_count) };
                 // SAFETY: addresses contains the physical address of each table page.
                 let physical_addresses =
                     unsafe { core::slice::from_raw_parts(addresses, table_count) };
@@ -555,22 +552,20 @@ unsafe fn build_architecture_page_tables(
     services: &BootServices,
     mappings: &[KernelPageMapping],
 ) -> Result<PreparedPageTables, Status> {
-    let architecture_mappings =
-        unsafe { allocate_array::<wicofe_kernel_aarch64::paging::PageMapping>(services, mappings.len())? };
+    let architecture_mappings = unsafe {
+        allocate_array::<wicofe_kernel_aarch64::paging::PageMapping>(services, mappings.len())?
+    };
     let result = (|| {
         // Attribute index 0 is a provisional normal-memory slot. WBL does not
         // program MAIR_EL1 here, so these tables must remain inactive.
         // SAFETY: architecture_mappings contains mappings.len() aligned writable entries.
-        let output = unsafe {
-            core::slice::from_raw_parts_mut(architecture_mappings, mappings.len())
-        };
+        let output =
+            unsafe { core::slice::from_raw_parts_mut(architecture_mappings, mappings.len()) };
         convert_kernel_page_mappings(mappings, 0, output).map_err(|_| EFI_INVALID_PARAMETER)?;
-        let converted = unsafe {
-            core::slice::from_raw_parts(architecture_mappings, mappings.len())
-        };
-        let table_count =
-            wicofe_kernel_aarch64::paging::required_table_capacity(converted)
-                .map_err(|_| EFI_INVALID_PARAMETER)?;
+        let converted =
+            unsafe { core::slice::from_raw_parts(architecture_mappings, mappings.len()) };
+        let table_count = wicofe_kernel_aarch64::paging::required_table_capacity(converted)
+            .map_err(|_| EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
         let build_result = (|| {
@@ -632,8 +627,7 @@ unsafe fn prepare_page_tables(
     kernel: LoadedKernel,
 ) -> Result<PreparedPageTables, Status> {
     let segment_capacity = usize::from(parsed.program_header_count());
-    let segments =
-        unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
+    let segments = unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
     let result = (|| {
         let mut segment_count = 0usize;
         for index in 0..parsed.program_header_count() {
@@ -648,13 +642,10 @@ unsafe fn prepare_page_tables(
         }
         // SAFETY: the first segment_count entries were initialized above.
         let segment_slice = unsafe { core::slice::from_raw_parts(segments, segment_count) };
-        let mappings =
-            unsafe { allocate_array::<KernelPageMapping>(services, segment_count)? };
+        let mappings = unsafe { allocate_array::<KernelPageMapping>(services, segment_count)? };
         let mapping_result = (|| {
             // SAFETY: mappings has segment_count aligned writable entries.
-            let output = unsafe {
-                core::slice::from_raw_parts_mut(mappings, segment_count)
-            };
+            let output = unsafe { core::slice::from_raw_parts_mut(mappings, segment_count) };
             let mapping_count = plan_kernel_page_mappings(
                 kernel.physical_base,
                 kernel.virtual_base,
