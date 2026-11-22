@@ -153,7 +153,6 @@ pub fn translate_uefi_memory_map(
     Ok(count)
 }
 
-
 /// Errors returned while decoding a firmware-provided EFI memory-map buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DescriptorDecodeError {
@@ -269,10 +268,21 @@ mod descriptor_decode_tests {
     #[test]
     fn decodes_standard_forty_byte_descriptor() {
         let mut bytes = [0u8; 40];
-        write_descriptor(&mut bytes, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 4, EFI_MEMORY_WB);
+        write_descriptor(
+            &mut bytes,
+            0,
+            EFI_CONVENTIONAL_MEMORY,
+            0x1000,
+            0,
+            4,
+            EFI_MEMORY_WB,
+        );
         let mut output = [UefiMemoryDescriptor::default(); 1];
 
-        assert_eq!(decode_uefi_memory_descriptors(&bytes, 40, &mut output), Ok(1));
+        assert_eq!(
+            decode_uefi_memory_descriptors(&bytes, 40, &mut output),
+            Ok(1)
+        );
         assert_eq!(output[0].memory_type, EFI_CONVENTIONAL_MEMORY);
         assert_eq!(output[0]._padding, 0x1234_5678);
         assert_eq!(output[0].physical_start, 0x1000);
@@ -284,19 +294,57 @@ mod descriptor_decode_tests {
     #[test]
     fn honors_firmware_descriptor_strides_larger_than_prefix() {
         let mut bytes_48 = [0u8; 96];
-        write_descriptor(&mut bytes_48, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 2, EFI_MEMORY_WB);
-        write_descriptor(&mut bytes_48, 48, EFI_LOADER_DATA, 0x2000, 0x7000, 1, EFI_MEMORY_UC);
+        write_descriptor(
+            &mut bytes_48,
+            0,
+            EFI_CONVENTIONAL_MEMORY,
+            0x1000,
+            0,
+            2,
+            EFI_MEMORY_WB,
+        );
+        write_descriptor(
+            &mut bytes_48,
+            48,
+            EFI_LOADER_DATA,
+            0x2000,
+            0x7000,
+            1,
+            EFI_MEMORY_UC,
+        );
         let mut bytes_56 = [0u8; 112];
-        write_descriptor(&mut bytes_56, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 2, EFI_MEMORY_WB);
-        write_descriptor(&mut bytes_56, 56, EFI_LOADER_DATA, 0x3000, 0x8000, 1, EFI_MEMORY_UC);
+        write_descriptor(
+            &mut bytes_56,
+            0,
+            EFI_CONVENTIONAL_MEMORY,
+            0x1000,
+            0,
+            2,
+            EFI_MEMORY_WB,
+        );
+        write_descriptor(
+            &mut bytes_56,
+            56,
+            EFI_LOADER_DATA,
+            0x3000,
+            0x8000,
+            1,
+            EFI_MEMORY_UC,
+        );
         let mut output = [UefiMemoryDescriptor::default(); 2];
 
-        assert_eq!(decode_uefi_memory_descriptors(&bytes_48, 48, &mut output), Ok(2));
+        assert_eq!(
+            decode_uefi_memory_descriptors(&bytes_48, 48, &mut output),
+            Ok(2)
+        );
         assert_eq!(output[1].memory_type, EFI_LOADER_DATA);
         assert_eq!(output[1].physical_start, 0x2000);
         assert_eq!(output[1].virtual_start, 0x7000);
 
-        assert_eq!(decode_uefi_memory_descriptors(&bytes_56, 56, &mut output), Ok(2));
+        assert_eq!(
+            decode_uefi_memory_descriptors(&bytes_56, 56, &mut output),
+            Ok(2)
+        );
         assert_eq!(output[0].physical_start, 0x1000);
         assert_eq!(output[1].memory_type, EFI_LOADER_DATA);
         assert_eq!(output[1].physical_start, 0x3000);
@@ -307,7 +355,15 @@ mod descriptor_decode_tests {
     #[test]
     fn decodes_unaligned_buffer_without_unaligned_reads() {
         let mut storage = [0u8; 57];
-        write_descriptor(&mut storage, 1, EFI_LOADER_DATA, 0x9000, 0, 3, EFI_MEMORY_WB);
+        write_descriptor(
+            &mut storage,
+            1,
+            EFI_LOADER_DATA,
+            0x9000,
+            0,
+            3,
+            EFI_MEMORY_WB,
+        );
         let mut output = [UefiMemoryDescriptor::default(); 1];
 
         assert_eq!(
