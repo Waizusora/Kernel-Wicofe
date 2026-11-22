@@ -631,7 +631,7 @@ unsafe fn prepare_page_tables(
     parsed: &ElfImage<'_>,
     kernel: LoadedKernel,
 ) -> Result<PreparedPageTables, Status> {
-    let segment_capacity = parsed.program_header_count();
+    let segment_capacity = usize::from(parsed.program_header_count());
     let segments =
         unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
     let result = (|| {
