@@ -636,7 +636,7 @@ unsafe fn prepare_page_tables(
         unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
     let result = (|| {
         let mut segment_count = 0usize;
-        for index in 0..segment_capacity {
+        for index in 0..parsed.program_header_count() {
             if let Some(segment) = parsed.load_segment(index) {
                 // SAFETY: segments has capacity for every program header.
                 unsafe { segments.add(segment_count).write(segment) };
