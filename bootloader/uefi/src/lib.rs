@@ -726,4 +726,7 @@ mod tests {
 }
 
 mod memory_map;
-pub use memory_map::{MemoryMapError, UefiMemoryDescriptor, translate_uefi_memory_map};
+pub use memory_map::{
+    DescriptorDecodeError, MemoryMapError, UefiMemoryDescriptor,
+    decode_uefi_memory_descriptors, translate_uefi_memory_map,
+};
