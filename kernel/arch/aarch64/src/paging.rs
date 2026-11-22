@@ -172,6 +172,13 @@ pub fn build_page_tables(
 mod tests {
     use super::*;
 
+    fn table_index(addresses: &[u64], entry: u64) -> usize {
+        addresses
+            .iter()
+            .position(|address| *address == (entry & OUTPUT_ADDRESS_MASK))
+            .unwrap()
+    }
+
     #[test]
     fn builds_high_half_mappings_and_reuses_tables() {
         let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
@@ -197,9 +204,9 @@ mod tests {
         ];
         assert_eq!(build_page_tables(&mut tables, &addresses, &mappings), Ok(4));
         let i = translation_table_indices(base).unwrap();
-        let l1 = addresses.iter().position(|address| *address == (tables[0][i[0]] & OUTPUT_ADDRESS_MASK)).unwrap();
-        let l2 = addresses.iter().position(|address| *address == (tables[l1][i[1]] & OUTPUT_ADDRESS_MASK)).unwrap();
-        let l3 = addresses.iter().position(|address| *address == (tables[l2][i[2]] & OUTPUT_ADDRESS_MASK)).unwrap();
+        let l1 = table_index(&addresses, tables[0][i[0]]);
+        let l2 = table_index(&addresses, tables[l1][i[1]]);
+        let l3 = table_index(&addresses, tables[l2][i[2]]);
         let text = tables[l3][i[3]];
         let data = tables[l3][i[3] + 1];
         assert_ne!(text & VALID, 0);
