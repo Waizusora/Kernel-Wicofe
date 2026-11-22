@@ -360,15 +360,15 @@ unsafe fn prepare_boot_info(
         let decoded = unsafe { core::slice::from_raw_parts_mut(descriptors, descriptor_capacity) };
         let decoded_count =
             match decode_uefi_memory_descriptors(raw_bytes, descriptor_size, decoded) {
-            Ok(count) if count == descriptor_count => count,
-            _ => {
-                unsafe { free_pool(services, info.cast()) };
-                unsafe { free_pool(services, regions.cast()) };
-                unsafe { free_pool(services, descriptors.cast()) };
-                unsafe { free_pool(services, raw_map) };
-                return Err(EFI_INVALID_PARAMETER);
-            }
-        };
+                Ok(count) if count == descriptor_count => count,
+                _ => {
+                    unsafe { free_pool(services, info.cast()) };
+                    unsafe { free_pool(services, regions.cast()) };
+                    unsafe { free_pool(services, descriptors.cast()) };
+                    unsafe { free_pool(services, raw_map) };
+                    return Err(EFI_INVALID_PARAMETER);
+                }
+            };
         // SAFETY: only decoded_count descriptor slots were initialized.
         let decoded = unsafe { core::slice::from_raw_parts(descriptors, decoded_count) };
         // SAFETY: regions has descriptor_capacity writable entries.
