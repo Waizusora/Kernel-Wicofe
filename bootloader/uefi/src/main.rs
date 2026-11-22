@@ -435,7 +435,6 @@ unsafe fn prepare_boot_info(
     Err(EFI_BUFFER_TOO_SMALL)
 }
 
-
 /// Refresh the retained canonical map and capture a new firmware map key.
 ///
 /// This function performs no allocation and makes no firmware calls after
@@ -480,9 +479,7 @@ unsafe fn refresh_prepared_boot_info(
     }
 
     // SAFETY: firmware wrote exactly map_size bytes into the retained buffer.
-    let raw_bytes = unsafe {
-        core::slice::from_raw_parts(prepared.raw_map.cast::<u8>(), map_size)
-    };
+    let raw_bytes = unsafe { core::slice::from_raw_parts(prepared.raw_map.cast::<u8>(), map_size) };
     // SAFETY: descriptor storage has descriptor_capacity aligned entries.
     let descriptor_output = unsafe {
         core::slice::from_raw_parts_mut(prepared.descriptors, prepared.descriptor_capacity)
@@ -495,13 +492,10 @@ unsafe fn refresh_prepared_boot_info(
     }
 
     // SAFETY: decoder initialized exactly descriptor_count entries.
-    let decoded = unsafe {
-        core::slice::from_raw_parts(prepared.descriptors, decoded_count)
-    };
+    let decoded = unsafe { core::slice::from_raw_parts(prepared.descriptors, decoded_count) };
     // SAFETY: region storage has descriptor_capacity writable entries.
-    let region_output = unsafe {
-        core::slice::from_raw_parts_mut(prepared.regions, prepared.descriptor_capacity)
-    };
+    let region_output =
+        unsafe { core::slice::from_raw_parts_mut(prepared.regions, prepared.descriptor_capacity) };
     let region_count = translate_uefi_memory_map(decoded, region_output)
         .ok()
         .filter(|count| *count != 0)
