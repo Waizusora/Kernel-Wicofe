@@ -12,9 +12,11 @@ use wicofe_bootloader_elf::{ElfImage, LoadSegment};
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
+use wicofe_bootloader_common::MemoryRegion;
 use wicofe_bootloader_uefi::{
-    KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, UEFI_PAGE_SIZE, kernel_allocation_layout,
-    page_table_allocation_layout, plan_kernel_page_mappings,
+    KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, UEFI_PAGE_SIZE, UefiMemoryDescriptor,
+    decode_uefi_memory_descriptors, kernel_allocation_layout, page_table_allocation_layout,
+    plan_kernel_page_mappings, translate_uefi_memory_map,
 };
 
 type Status = usize;
@@ -23,6 +25,8 @@ type Handle = *mut c_void;
 const EFI_ERROR_BIT: usize = 1usize << (usize::BITS - 1);
 const EFI_BUFFER_TOO_SMALL: Status = EFI_ERROR_BIT | 5;
 const EFI_INVALID_PARAMETER: Status = EFI_ERROR_BIT | 2;
+const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
+const MAX_MEMORY_MAP_ATTEMPTS: usize = 4;
 const EFI_LOADER_DATA: u32 = 2;
 const EFI_FILE_MODE_READ: u64 = 1;
 const MAX_KERNEL_SIZE: usize = 64 * 1024 * 1024;
@@ -92,6 +96,13 @@ struct SystemTable {
 type HandleProtocolFn = unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void) -> Status;
 type AllocatePagesFn = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
 type FreePagesFn = unsafe extern "efiapi" fn(u64, usize) -> Status;
+type GetMemoryMapFn = unsafe extern "efiapi" fn(
+    *mut usize,
+    *mut c_void,
+    *mut usize,
+    *mut usize,
+    *mut u32,
+) -> Status;
 type AllocatePoolFn = unsafe extern "efiapi" fn(u32, usize, *mut *mut c_void) -> Status;
 type FreePoolFn = unsafe extern "efiapi" fn(*mut c_void) -> Status;
 #[repr(C)]
@@ -100,7 +111,7 @@ struct BootServices {
     before_pages: [usize; 2],
     allocate_pages: Option<AllocatePagesFn>,
     free_pages: Option<FreePagesFn>,
-    before_pool: [usize; 1],
+    get_memory_map: Option<GetMemoryMapFn>,
     allocate_pool: Option<AllocatePoolFn>,
     free_pool: Option<FreePoolFn>,
     between_pool_and_handle: [usize; 9],
@@ -198,6 +209,153 @@ unsafe fn free_pool(services: &BootServices, buffer: *mut c_void) {
             let _ = unsafe { function(buffer) };
         }
     }
+}
+
+/// Capture, decode, and canonically validate the firmware memory map.
+///
+/// The map is not handed to the kernel yet. This stage verifies the live UEFI
+/// descriptor stride and the translator against an actual firmware snapshot.
+unsafe fn validate_firmware_memory_map(services: &BootServices) -> Result<usize, Status> {
+    let get_memory_map = services
+        .get_memory_map
+        .ok_or(EFI_INVALID_PARAMETER)?;
+    let mut required_size = 0usize;
+    let mut map_key = 0usize;
+    let mut descriptor_size = 0usize;
+    let mut descriptor_version = 0u32;
+
+    // SAFETY: a null map with a zero size is the UEFI size-query operation.
+    let status = unsafe {
+        get_memory_map(
+            &mut required_size,
+            core::ptr::null_mut(),
+            &mut map_key,
+            &mut descriptor_size,
+            &mut descriptor_version,
+        )
+    };
+    if status != EFI_BUFFER_TOO_SMALL
+        || required_size == 0
+        || descriptor_size < 40
+        || descriptor_size % 8 != 0
+        || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
+    {
+        return Err(if is_error(status) {
+            status
+        } else {
+            EFI_INVALID_PARAMETER
+        });
+    }
+
+    let mut capacity = required_size
+        .checked_add(
+            descriptor_size
+                .checked_mul(2)
+                .ok_or(EFI_INVALID_PARAMETER)?,
+        )
+        .ok_or(EFI_INVALID_PARAMETER)?;
+
+    for _ in 0..MAX_MEMORY_MAP_ATTEMPTS {
+        // AllocatePool changes the map, which is why every attempt calls
+        // GetMemoryMap again after allocating the buffer.
+        let buffer = unsafe { allocate_pool(services, capacity)? };
+        let mut map_size = capacity;
+        map_key = 0;
+        descriptor_size = 0;
+        descriptor_version = 0;
+        // SAFETY: buffer spans capacity writable bytes and all output pointers are valid.
+        let status = unsafe {
+            get_memory_map(
+                &mut map_size,
+                buffer,
+                &mut map_key,
+                &mut descriptor_size,
+                &mut descriptor_version,
+            )
+        };
+
+        if status == EFI_BUFFER_TOO_SMALL {
+            // SAFETY: this attempt's buffer is no longer needed.
+            unsafe { free_pool(services, buffer) };
+            if descriptor_size < 40
+                || descriptor_size % 8 != 0
+                || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
+            {
+                return Err(EFI_INVALID_PARAMETER);
+            }
+            capacity = map_size
+                .checked_add(
+                    descriptor_size
+                        .checked_mul(2)
+                        .ok_or(EFI_INVALID_PARAMETER)?,
+                )
+                .ok_or(EFI_INVALID_PARAMETER)?;
+            continue;
+        }
+        if is_error(status) {
+            // SAFETY: release the temporary buffer after a failed firmware call.
+            unsafe { free_pool(services, buffer) };
+            return Err(status);
+        }
+        if map_size == 0
+            || map_size > capacity
+            || descriptor_size < 40
+            || descriptor_size % 8 != 0
+            || descriptor_version != EFI_MEMORY_DESCRIPTOR_VERSION
+            || map_size % descriptor_size != 0
+        {
+            // SAFETY: release the temporary buffer after invalid firmware metadata.
+            unsafe { free_pool(services, buffer) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+
+        let descriptor_count = map_size / descriptor_size;
+        let validation = (|| {
+            let descriptors =
+                unsafe { allocate_array::<UefiMemoryDescriptor>(services, descriptor_count)? };
+            let decode_result = (|| {
+                // SAFETY: buffer contains map_size initialized firmware bytes.
+                let raw_map = unsafe {
+                    core::slice::from_raw_parts(buffer.cast::<u8>(), map_size)
+                };
+                // SAFETY: descriptors has descriptor_count aligned writable entries.
+                let decoded = unsafe {
+                    core::slice::from_raw_parts_mut(descriptors, descriptor_count)
+                };
+                let decoded_count = decode_uefi_memory_descriptors(
+                    raw_map,
+                    descriptor_size,
+                    decoded,
+                )
+                .map_err(|_| EFI_INVALID_PARAMETER)?;
+                let regions =
+                    unsafe { allocate_array::<MemoryRegion>(services, decoded_count)? };
+                let translate_result = (|| {
+                    // SAFETY: only decoded_count descriptor entries were initialized.
+                    let decoded = unsafe {
+                        core::slice::from_raw_parts(descriptors, decoded_count)
+                    };
+                    // SAFETY: regions has decoded_count aligned writable entries.
+                    let output = unsafe {
+                        core::slice::from_raw_parts_mut(regions, decoded_count)
+                    };
+                    translate_uefi_memory_map(decoded, output)
+                        .map_err(|_| EFI_INVALID_PARAMETER)
+                })();
+                // SAFETY: regions was allocated above.
+                unsafe { free_pool(services, regions.cast()) };
+                translate_result
+            })();
+            // SAFETY: descriptors was allocated above.
+            unsafe { free_pool(services, descriptors.cast()) };
+            decode_result
+        })();
+        // SAFETY: release the raw memory-map snapshot after validation.
+        unsafe { free_pool(services, buffer) };
+        return validation;
+    }
+
+    Err(EFI_BUFFER_TOO_SMALL)
 }
 
 unsafe fn read_kernel(
@@ -813,6 +971,15 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
     };
     // SAFETY: release the temporary source file after parsing and copying finish.
     unsafe { free_pool(&*boot_services, image.cast()) };
+
+    if loaded_kernel.is_ok() {
+        // SAFETY: the UEFI boot-services table remains active; no handoff or
+        // ExitBootServices call has occurred in this stage.
+        if let Err(status) = unsafe { validate_firmware_memory_map(&*boot_services) } {
+            let _ = print_message(system_table, ERROR_MESSAGE);
+            return status;
+        }
+    }
 
     match loaded_kernel {
         Ok((kernel, tables)) => {
