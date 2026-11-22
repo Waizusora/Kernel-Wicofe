@@ -183,10 +183,7 @@ fn mapping_access(permissions: u32) -> Result<(bool, bool), MappingConversionErr
     {
         return Err(MappingConversionError::UnsupportedPermissions);
     }
-    Ok((
-        permissions & MAP_WRITE != 0,
-        permissions & MAP_EXECUTE != 0,
-    ))
+    Ok((permissions & MAP_WRITE != 0, permissions & MAP_EXECUTE != 0))
 }
 
 /// Translate planned ELF mappings into the x86-64 page-table builder input.
