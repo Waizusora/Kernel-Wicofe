@@ -40,7 +40,6 @@ pub fn kernel_allocation_layout(image_size: u64) -> Option<KernelAllocationLayou
     })
 }
 
-
 /// Page-table backing-store requirements for a contiguous UEFI allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PageTableAllocationLayout {
