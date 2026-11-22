@@ -407,7 +407,8 @@ const PE_MACHINE_AARCH64: u16 = 0xaa64;
 const PE_IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 const PE_IMAGE_SCN_MEM_READ: u32 = 0x4000_0000;
 const PE_IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
-const PE_MAX_SECTIONS: usize = 96;
+pub const MAX_PE_IDENTITY_MAPPINGS: usize = 97;
+const PE_MAX_SECTIONS: usize = MAX_PE_IDENTITY_MAPPINGS - 1;
 
 fn pe_read_u16(image: &[u8], offset: usize) -> Result<u16, PeMappingError> {
     let bytes = image
