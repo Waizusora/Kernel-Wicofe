@@ -1,7 +1,7 @@
 //! AArch64 four-level translation descriptor encoding for 4 KiB pages.
- //!
- //! This module builds and validates level-3 page descriptors only. It does
- //! not allocate translation tables, program TTBR/TCR/MAIR, or enable MMU.
+//!
+//! This module builds and validates level-3 page descriptors only. It does
+//! not allocate translation tables, program TTBR/TCR/MAIR, or enable MMU.
 
 pub const PAGE_SIZE: u64 = 4096;
 pub const ENTRIES_PER_TABLE: usize = 512;
@@ -99,10 +99,7 @@ mod tests {
         assert_eq!(descriptor & AP_EL1_READ_ONLY, AP_EL1_READ_ONLY);
         assert_eq!(descriptor & PXN, 0);
         assert_ne!(descriptor & UXN, 0);
-        assert_eq!(
-            (descriptor >> ATTR_INDEX_SHIFT) & 0b111,
-            1
-        );
+        assert_eq!((descriptor >> ATTR_INDEX_SHIFT) & 0b111, 1);
     }
 
     #[test]

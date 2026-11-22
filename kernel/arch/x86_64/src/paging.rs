@@ -1,7 +1,7 @@
 //! x86-64 four-level paging descriptor encoding for 4 KiB pages.
- //!
- //! This module builds and validates leaf-entry values only. It does not
- //! allocate page-table pages, install CR3, or change the active address space.
+//!
+//! This module builds and validates leaf-entry values only. It does not
+//! allocate page-table pages, install CR3, or change the active address space.
 
 pub const PAGE_SIZE: u64 = 4096;
 pub const ENTRIES_PER_TABLE: usize = 512;
