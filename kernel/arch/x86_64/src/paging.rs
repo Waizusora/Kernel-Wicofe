@@ -106,9 +106,17 @@ pub fn build_page_tables(
             return Err(PagingError::MisalignedAddress);
         }
         for page in 0..mapping.page_count {
-            let offset = page.checked_mul(PAGE_SIZE).ok_or(PagingError::AddressOverflow)?;
-            let va = mapping.virtual_start.checked_add(offset).ok_or(PagingError::AddressOverflow)?;
-            let pa = mapping.physical_start.checked_add(offset).ok_or(PagingError::AddressOverflow)?;
+            let offset = page
+                .checked_mul(PAGE_SIZE)
+                .ok_or(PagingError::AddressOverflow)?;
+            let va = mapping
+                .virtual_start
+                .checked_add(offset)
+                .ok_or(PagingError::AddressOverflow)?;
+            let pa = mapping
+                .physical_start
+                .checked_add(offset)
+                .ok_or(PagingError::AddressOverflow)?;
             let leaf = encode_page(pa, mapping.writable, mapping.executable)?;
             let indexes = page_table_indices(va)?;
             let mut parent = 0usize;
@@ -126,8 +134,7 @@ pub fn build_page_tables(
                     }
                     let child = used;
                     used += 1;
-                    tables[parent][*slot] =
-                        table_physical_addresses[child] | PRESENT | WRITABLE;
+                    tables[parent][*slot] = table_physical_addresses[child] | PRESENT | WRITABLE;
                     parent = child;
                 }
             }

@@ -120,9 +120,17 @@ pub fn build_page_tables(
             return Err(PagingError::MisalignedAddress);
         }
         for page in 0..mapping.page_count {
-            let offset = page.checked_mul(PAGE_SIZE).ok_or(PagingError::AddressOverflow)?;
-            let va = mapping.virtual_start.checked_add(offset).ok_or(PagingError::AddressOverflow)?;
-            let pa = mapping.physical_start.checked_add(offset).ok_or(PagingError::AddressOverflow)?;
+            let offset = page
+                .checked_mul(PAGE_SIZE)
+                .ok_or(PagingError::AddressOverflow)?;
+            let va = mapping
+                .virtual_start
+                .checked_add(offset)
+                .ok_or(PagingError::AddressOverflow)?;
+            let pa = mapping
+                .physical_start
+                .checked_add(offset)
+                .ok_or(PagingError::AddressOverflow)?;
             let leaf = encode_page(
                 pa,
                 mapping.writable,
