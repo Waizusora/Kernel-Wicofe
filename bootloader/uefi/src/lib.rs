@@ -411,14 +411,24 @@ const PE_MAX_SECTIONS: usize = 96;
 
 fn pe_read_u16(image: &[u8], offset: usize) -> Result<u16, PeMappingError> {
     let bytes = image
-        .get(offset..offset.checked_add(2).ok_or(PeMappingError::AddressOverflow)?)
+        .get(
+            offset
+                ..offset
+                    .checked_add(2)
+                    .ok_or(PeMappingError::AddressOverflow)?,
+        )
         .ok_or(PeMappingError::InvalidImage)?;
     Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
 }
 
 fn pe_read_u32(image: &[u8], offset: usize) -> Result<u32, PeMappingError> {
     let bytes = image
-        .get(offset..offset.checked_add(4).ok_or(PeMappingError::AddressOverflow)?)
+        .get(
+            offset
+                ..offset
+                    .checked_add(4)
+                    .ok_or(PeMappingError::AddressOverflow)?,
+        )
         .ok_or(PeMappingError::InvalidImage)?;
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
@@ -438,8 +448,8 @@ pub fn plan_pe_identity_mappings(
         return Err(PeMappingError::InvalidImage);
     }
 
-    let pe_offset = usize::try_from(pe_read_u32(image, 0x3c)?)
-        .map_err(|_| PeMappingError::AddressOverflow)?;
+    let pe_offset =
+        usize::try_from(pe_read_u32(image, 0x3c)?).map_err(|_| PeMappingError::AddressOverflow)?;
     let signature_end = pe_offset
         .checked_add(4)
         .ok_or(PeMappingError::AddressOverflow)?;
@@ -520,7 +530,11 @@ pub fn plan_pe_identity_mappings(
 
     for index in 0..section_count {
         let section = optional_end
-            .checked_add(index.checked_mul(40).ok_or(PeMappingError::AddressOverflow)?)
+            .checked_add(
+                index
+                    .checked_mul(40)
+                    .ok_or(PeMappingError::AddressOverflow)?,
+            )
             .ok_or(PeMappingError::AddressOverflow)?;
         let virtual_size = u64::from(pe_read_u32(image, section + 8)?);
         let virtual_address = u64::from(pe_read_u32(image, section + 12)?);
@@ -883,8 +897,7 @@ mod tests {
         );
 
         image = synthetic_pe_image();
-        image[sections + 40 + 12..sections + 40 + 16]
-            .copy_from_slice(&0x1800u32.to_le_bytes());
+        image[sections + 40 + 12..sections + 40 + 16].copy_from_slice(&0x1800u32.to_le_bytes());
         assert_eq!(
             plan_pe_identity_mappings(0x10_0000, &image, &mut mappings),
             Err(PeMappingError::OverlappingSections)
