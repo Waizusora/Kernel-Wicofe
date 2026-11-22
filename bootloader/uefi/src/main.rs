@@ -7,11 +7,11 @@ use core::panic::PanicInfo;
 use wicofe_bootloader_elf::EM_AARCH64;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_elf::EM_X86_64;
+use wicofe_bootloader_elf::{ElfImage, LoadSegment};
 #[cfg(target_arch = "aarch64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
-use wicofe_bootloader_elf::{ElfImage, LoadSegment};
 use wicofe_bootloader_uefi::{
     KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, UEFI_PAGE_SIZE, kernel_allocation_layout,
     page_table_allocation_layout, plan_kernel_page_mappings,
@@ -569,28 +569,27 @@ unsafe fn build_architecture_page_tables(
         // SAFETY: the pool is retained on success and released on any builder failure.
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
         let build_result = (|| {
-            let addresses =
-                unsafe { allocate_array::<u64>(services, table_count)? };
+            let addresses = unsafe { allocate_array::<u64>(services, table_count)? };
             let address_result = (|| {
                 for index in 0..table_count {
                     let offset = u64::try_from(index)
                         .ok()
                         .and_then(|value| value.checked_mul(UEFI_PAGE_SIZE))
                         .ok_or(EFI_INVALID_PARAMETER)?;
-                    let address = table_base.checked_add(offset).ok_or(EFI_INVALID_PARAMETER)?;
+                    let address = table_base
+                        .checked_add(offset)
+                        .ok_or(EFI_INVALID_PARAMETER)?;
                     // SAFETY: addresses points to table_count initialized allocation slots.
                     unsafe { addresses.add(index).write(address) };
                 }
-                let table_pointer =
-                    usize::try_from(table_base).map_err(|_| EFI_INVALID_PARAMETER)?
-                        as *mut [u64; 512];
+                let table_pointer = usize::try_from(table_base)
+                    .map_err(|_| EFI_INVALID_PARAMETER)?
+                    as *mut [u64; 512];
                 if (table_pointer as usize) % core::mem::align_of::<[u64; 512]>() != 0 {
                     return Err(EFI_INVALID_PARAMETER);
                 }
                 // SAFETY: UEFI allocated table_count contiguous, page-aligned pages.
-                let tables = unsafe {
-                    core::slice::from_raw_parts_mut(table_pointer, table_count)
-                };
+                let tables = unsafe { core::slice::from_raw_parts_mut(table_pointer, table_count) };
                 // SAFETY: addresses contains the physical address of each table page.
                 let physical_addresses =
                     unsafe { core::slice::from_raw_parts(addresses, table_count) };
