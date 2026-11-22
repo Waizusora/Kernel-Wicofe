@@ -153,6 +153,193 @@ pub fn translate_uefi_memory_map(
     Ok(count)
 }
 
+
+/// Errors returned while decoding a firmware-provided EFI memory-map buffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DescriptorDecodeError {
+    EmptyBuffer,
+    DescriptorSizeTooSmall,
+    DescriptorSizeMisaligned,
+    BufferSizeNotMultipleOfDescriptorSize,
+    OutputTooSmall,
+    ArithmeticOverflow,
+}
+
+const EFI_MEMORY_DESCRIPTOR_PREFIX_SIZE: usize = 40;
+const EFI_MEMORY_DESCRIPTOR_ALIGNMENT: usize = 8;
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32, DescriptorDecodeError> {
+    let end = offset
+        .checked_add(4)
+        .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+    let field = bytes
+        .get(offset..end)
+        .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+    let mut value = [0u8; 4];
+    value.copy_from_slice(field);
+    Ok(u32::from_le_bytes(value))
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Result<u64, DescriptorDecodeError> {
+    let end = offset
+        .checked_add(8)
+        .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+    let field = bytes
+        .get(offset..end)
+        .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+    let mut value = [0u8; 8];
+    value.copy_from_slice(field);
+    Ok(u64::from_le_bytes(value))
+}
+
+/// Decode an EFI memory-map byte buffer using the descriptor stride reported
+/// by firmware. Only the stable 40-byte EFI_MEMORY_DESCRIPTOR prefix is read;
+/// any firmware-specific extension bytes are skipped.
+///
+/// The buffer and output storage are caller-owned. This function performs no
+/// allocation and accepts unaligned buffer addresses safely.
+pub fn decode_uefi_memory_descriptors(
+    buffer: &[u8],
+    descriptor_size: usize,
+    output: &mut [UefiMemoryDescriptor],
+) -> Result<usize, DescriptorDecodeError> {
+    if buffer.is_empty() {
+        return Err(DescriptorDecodeError::EmptyBuffer);
+    }
+    if descriptor_size < EFI_MEMORY_DESCRIPTOR_PREFIX_SIZE {
+        return Err(DescriptorDecodeError::DescriptorSizeTooSmall);
+    }
+    if descriptor_size % EFI_MEMORY_DESCRIPTOR_ALIGNMENT != 0 {
+        return Err(DescriptorDecodeError::DescriptorSizeMisaligned);
+    }
+    if buffer.len() % descriptor_size != 0 {
+        return Err(DescriptorDecodeError::BufferSizeNotMultipleOfDescriptorSize);
+    }
+
+    let descriptor_count = buffer.len() / descriptor_size;
+    if output.len() < descriptor_count {
+        return Err(DescriptorDecodeError::OutputTooSmall);
+    }
+
+    for (index, destination) in output.iter_mut().take(descriptor_count).enumerate() {
+        let start = index
+            .checked_mul(descriptor_size)
+            .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+        let prefix_end = start
+            .checked_add(EFI_MEMORY_DESCRIPTOR_PREFIX_SIZE)
+            .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+        let descriptor = buffer
+            .get(start..prefix_end)
+            .ok_or(DescriptorDecodeError::ArithmeticOverflow)?;
+
+        *destination = UefiMemoryDescriptor {
+            memory_type: read_u32_le(descriptor, 0)?,
+            _padding: read_u32_le(descriptor, 4)?,
+            physical_start: read_u64_le(descriptor, 8)?,
+            virtual_start: read_u64_le(descriptor, 16)?,
+            number_of_pages: read_u64_le(descriptor, 24)?,
+            attribute: read_u64_le(descriptor, 32)?,
+        };
+    }
+
+    Ok(descriptor_count)
+}
+
+#[cfg(test)]
+mod descriptor_decode_tests {
+    use super::*;
+
+    fn write_descriptor(
+        buffer: &mut [u8],
+        offset: usize,
+        memory_type: u32,
+        physical_start: u64,
+        virtual_start: u64,
+        pages: u64,
+        attribute: u64,
+    ) {
+        buffer[offset..offset + 4].copy_from_slice(&memory_type.to_le_bytes());
+        buffer[offset + 4..offset + 8].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        buffer[offset + 8..offset + 16].copy_from_slice(&physical_start.to_le_bytes());
+        buffer[offset + 16..offset + 24].copy_from_slice(&virtual_start.to_le_bytes());
+        buffer[offset + 24..offset + 32].copy_from_slice(&pages.to_le_bytes());
+        buffer[offset + 32..offset + 40].copy_from_slice(&attribute.to_le_bytes());
+    }
+
+    #[test]
+    fn decodes_standard_forty_byte_descriptor() {
+        let mut bytes = [0u8; 40];
+        write_descriptor(&mut bytes, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 4, EFI_MEMORY_WB);
+        let mut output = [UefiMemoryDescriptor::default(); 1];
+
+        assert_eq!(decode_uefi_memory_descriptors(&bytes, 40, &mut output), Ok(1));
+        assert_eq!(output[0].memory_type, EFI_CONVENTIONAL_MEMORY);
+        assert_eq!(output[0]._padding, 0x1234_5678);
+        assert_eq!(output[0].physical_start, 0x1000);
+        assert_eq!(output[0].virtual_start, 0);
+        assert_eq!(output[0].number_of_pages, 4);
+        assert_eq!(output[0].attribute, EFI_MEMORY_WB);
+    }
+
+    #[test]
+    fn honors_firmware_descriptor_strides_larger_than_prefix() {
+        let mut bytes = [0u8; 112];
+        write_descriptor(&mut bytes, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 2, EFI_MEMORY_WB);
+        write_descriptor(&mut bytes, 56, EFI_LOADER_DATA, 0x3000, 0x8000, 1, EFI_MEMORY_UC);
+        let mut output = [UefiMemoryDescriptor::default(); 2];
+
+        assert_eq!(decode_uefi_memory_descriptors(&bytes[..96], 48, &mut output), Ok(2));
+        assert_eq!(output[1].physical_start, 0);
+        assert_eq!(output[1].memory_type, EFI_CONVENTIONAL_MEMORY);
+
+        assert_eq!(decode_uefi_memory_descriptors(&bytes, 56, &mut output), Ok(2));
+        assert_eq!(output[0].physical_start, 0x1000);
+        assert_eq!(output[1].memory_type, EFI_LOADER_DATA);
+        assert_eq!(output[1].physical_start, 0x3000);
+        assert_eq!(output[1].virtual_start, 0x8000);
+        assert_eq!(output[1].attribute, EFI_MEMORY_UC);
+    }
+
+    #[test]
+    fn decodes_unaligned_buffer_without_unaligned_reads() {
+        let mut storage = [0u8; 57];
+        write_descriptor(&mut storage, 1, EFI_LOADER_DATA, 0x9000, 0, 3, EFI_MEMORY_WB);
+        let mut output = [UefiMemoryDescriptor::default(); 1];
+
+        assert_eq!(
+            decode_uefi_memory_descriptors(&storage[1..], 56, &mut output),
+            Ok(1)
+        );
+        assert_eq!(output[0].physical_start, 0x9000);
+        assert_eq!(output[0].number_of_pages, 3);
+    }
+
+    #[test]
+    fn rejects_invalid_buffer_and_descriptor_strides() {
+        let mut output = [UefiMemoryDescriptor::default(); 2];
+        assert_eq!(
+            decode_uefi_memory_descriptors(&[], 40, &mut output),
+            Err(DescriptorDecodeError::EmptyBuffer)
+        );
+        assert_eq!(
+            decode_uefi_memory_descriptors(&[0; 39], 39, &mut output),
+            Err(DescriptorDecodeError::DescriptorSizeTooSmall)
+        );
+        assert_eq!(
+            decode_uefi_memory_descriptors(&[0; 40], 41, &mut output),
+            Err(DescriptorDecodeError::DescriptorSizeMisaligned)
+        );
+        assert_eq!(
+            decode_uefi_memory_descriptors(&[0; 41], 40, &mut output),
+            Err(DescriptorDecodeError::BufferSizeNotMultipleOfDescriptorSize)
+        );
+        assert_eq!(
+            decode_uefi_memory_descriptors(&[0; 112], 56, &mut output[..1]),
+            Err(DescriptorDecodeError::OutputTooSmall)
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
