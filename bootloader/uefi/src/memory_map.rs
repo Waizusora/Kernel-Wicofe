@@ -283,16 +283,20 @@ mod descriptor_decode_tests {
 
     #[test]
     fn honors_firmware_descriptor_strides_larger_than_prefix() {
-        let mut bytes = [0u8; 112];
-        write_descriptor(&mut bytes, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 2, EFI_MEMORY_WB);
-        write_descriptor(&mut bytes, 56, EFI_LOADER_DATA, 0x3000, 0x8000, 1, EFI_MEMORY_UC);
+        let mut bytes_48 = [0u8; 96];
+        write_descriptor(&mut bytes_48, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 2, EFI_MEMORY_WB);
+        write_descriptor(&mut bytes_48, 48, EFI_LOADER_DATA, 0x2000, 0x7000, 1, EFI_MEMORY_UC);
+        let mut bytes_56 = [0u8; 112];
+        write_descriptor(&mut bytes_56, 0, EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 2, EFI_MEMORY_WB);
+        write_descriptor(&mut bytes_56, 56, EFI_LOADER_DATA, 0x3000, 0x8000, 1, EFI_MEMORY_UC);
         let mut output = [UefiMemoryDescriptor::default(); 2];
 
-        assert_eq!(decode_uefi_memory_descriptors(&bytes[..96], 48, &mut output), Ok(2));
-        assert_eq!(output[1].physical_start, 0);
-        assert_eq!(output[1].memory_type, EFI_CONVENTIONAL_MEMORY);
+        assert_eq!(decode_uefi_memory_descriptors(&bytes_48, 48, &mut output), Ok(2));
+        assert_eq!(output[1].memory_type, EFI_LOADER_DATA);
+        assert_eq!(output[1].physical_start, 0x2000);
+        assert_eq!(output[1].virtual_start, 0x7000);
 
-        assert_eq!(decode_uefi_memory_descriptors(&bytes, 56, &mut output), Ok(2));
+        assert_eq!(decode_uefi_memory_descriptors(&bytes_56, 56, &mut output), Ok(2));
         assert_eq!(output[0].physical_start, 0x1000);
         assert_eq!(output[1].memory_type, EFI_LOADER_DATA);
         assert_eq!(output[1].physical_start, 0x3000);
