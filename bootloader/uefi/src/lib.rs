@@ -3,7 +3,7 @@
 //! UEFI-facing boundary and checked allocation planning for Wicofe Bootloader.
 
 pub use wicofe_bootloader_common::{BOOT_INFO_VERSION, BootInfo, MemoryRegion};
-use wicofe_bootloader_elf::{LoadSegment, PF_R, PF_W, PF_X};
+use wicofe_bootloader_elf::LoadSegment;
 
 pub const UEFI_PAGE_SIZE: u64 = 4096;
 pub const KERNEL_PHYSICAL_ALIGNMENT: u64 = 2 * 1024 * 1024;
