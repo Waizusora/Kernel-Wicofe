@@ -107,7 +107,11 @@ pub fn plan_kernel_page_mappings(
         let page_count = (page_end - page_start) / UEFI_PAGE_SIZE;
         let permissions = (if segment.is_readable() { MAP_READ } else { 0 })
             | (if segment.is_writable() { MAP_WRITE } else { 0 })
-            | (if segment.is_executable() { MAP_EXECUTE } else { 0 });
+            | (if segment.is_executable() {
+                MAP_EXECUTE
+            } else {
+                0
+            });
 
         for previous in &output[..count] {
             let previous_end = previous
@@ -241,7 +245,10 @@ mod tests {
             plan_kernel_page_mappings(
                 0x20_0000,
                 base,
-                &[segment(base, 0x1000, PF_R), segment(base + 0x2000, 0x1000, PF_R)],
+                &[
+                    segment(base, 0x1000, PF_R),
+                    segment(base + 0x2000, 0x1000, PF_R)
+                ],
                 &mut []
             ),
             Err(MappingPlanError::OutputTooSmall)
