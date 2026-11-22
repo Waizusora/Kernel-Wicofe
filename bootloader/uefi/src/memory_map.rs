@@ -62,8 +62,13 @@ fn classify(memory_type: u32) -> u32 {
         EFI_ACPI_RECLAIM_MEMORY => memory_kind::ACPI_RECLAIM,
         EFI_ACPI_MEMORY_NVS => memory_kind::ACPI_NVS,
         EFI_MEMORY_MAPPED_IO | EFI_MEMORY_MAPPED_IO_PORT_SPACE => memory_kind::MMIO,
-        // Reserved, unusable, PAL, persistent, unaccepted, and unknown types
-        // are deliberately not exposed to the physical allocator as usable.
+        // These defined UEFI types are deliberately never exposed as usable.
+        EFI_RESERVED_MEMORY_TYPE
+        | EFI_UNUSABLE_MEMORY
+        | EFI_PAL_CODE
+        | EFI_PERSISTENT_MEMORY
+        | EFI_UNACCEPTED_MEMORY_TYPE => memory_kind::RESERVED,
+        // Future or vendor-specific types are conservatively reserved too.
         _ => memory_kind::RESERVED,
     }
 }
