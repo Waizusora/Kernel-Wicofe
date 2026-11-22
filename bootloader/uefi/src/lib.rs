@@ -307,6 +307,86 @@ pub fn plan_identity_page_mappings(
     Ok(count)
 }
 
+/// Errors while combining kernel mappings with WBL identity mappings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CombinedMappingError {
+    OutputTooSmall,
+    InvalidKernelMapping,
+    AddressOverflow,
+    Identity(IdentityMappingError),
+    OverlappingMapping,
+}
+
+/// Combine kernel virtual mappings and explicit WBL identity ranges.
+///
+/// All ranges are validated before the result is passed to an architecture
+/// page-table builder. This function does not discover WBL ranges or activate
+/// the resulting tables.
+pub fn plan_combined_page_mappings(
+    kernel_mappings: &[KernelPageMapping],
+    identity_ranges: &[IdentityMappingRange],
+    output: &mut [KernelPageMapping],
+) -> Result<usize, CombinedMappingError> {
+    let required = kernel_mappings
+        .len()
+        .checked_add(identity_ranges.len())
+        .ok_or(CombinedMappingError::OutputTooSmall)?;
+    if output.len() < required {
+        return Err(CombinedMappingError::OutputTooSmall);
+    }
+
+    for (index, mapping) in kernel_mappings.iter().enumerate() {
+        mapping_access(mapping.permissions)
+            .map_err(|_| CombinedMappingError::InvalidKernelMapping)?;
+        if mapping.page_count == 0 {
+            return Err(CombinedMappingError::InvalidKernelMapping);
+        }
+        let size = mapping
+            .page_count
+            .checked_mul(UEFI_PAGE_SIZE)
+            .ok_or(CombinedMappingError::AddressOverflow)?;
+        mapping
+            .virtual_start
+            .checked_add(size)
+            .ok_or(CombinedMappingError::AddressOverflow)?;
+        mapping
+            .physical_start
+            .checked_add(size)
+            .ok_or(CombinedMappingError::AddressOverflow)?;
+        output[index] = *mapping;
+    }
+
+    let identity_output = &mut output[kernel_mappings.len()..required];
+    let identity_count = plan_identity_page_mappings(identity_ranges, identity_output)
+        .map_err(CombinedMappingError::Identity)?;
+
+    for identity in &identity_output[..identity_count] {
+        let identity_size = identity
+            .page_count
+            .checked_mul(UEFI_PAGE_SIZE)
+            .ok_or(CombinedMappingError::AddressOverflow)?;
+        let identity_end = identity
+            .virtual_start
+            .checked_add(identity_size)
+            .ok_or(CombinedMappingError::AddressOverflow)?;
+        for kernel in kernel_mappings {
+            let kernel_size = kernel
+                .page_count
+                .checked_mul(UEFI_PAGE_SIZE)
+                .ok_or(CombinedMappingError::AddressOverflow)?;
+            let kernel_end = kernel
+                .virtual_start
+                .checked_add(kernel_size)
+                .ok_or(CombinedMappingError::AddressOverflow)?;
+            if identity.virtual_start < kernel_end && kernel.virtual_start < identity_end {
+                return Err(CombinedMappingError::OverlappingMapping);
+            }
+        }
+    }
+
+    Ok(kernel_mappings.len() + identity_count)
+}
+
 /// UEFI removable-media fallback path for x86-64 firmware.
 pub const X86_64_FALLBACK_PATH: &str = r"\EFI\BOOT\BOOTX64.EFI";
 
@@ -408,6 +488,87 @@ mod tests {
         assert_eq!(
             plan_identity_page_mappings(&two, &mut [KernelPageMapping::default(); 1]),
             Err(IdentityMappingError::OutputTooSmall)
+        );
+    }
+
+    #[test]
+    fn combined_mapping_planner_appends_disjoint_identity_ranges() {
+        let kernel = [KernelPageMapping {
+            physical_start: 0x20_0000,
+            virtual_start: 0xffff_ffff_8000_0000,
+            page_count: 2,
+            permissions: MAP_READ | MAP_EXECUTE,
+        }];
+        let identity = [IdentityMappingRange {
+            physical_start: 0x40_0123,
+            length: 0x1000,
+            permissions: MAP_READ | MAP_WRITE,
+        }];
+        let mut output = [KernelPageMapping::default(); 2];
+        assert_eq!(
+            plan_combined_page_mappings(&kernel, &identity, &mut output),
+            Ok(2)
+        );
+        assert_eq!(output[0], kernel[0]);
+        assert_eq!(output[1].physical_start, 0x40_0000);
+        assert_eq!(output[1].virtual_start, 0x40_0000);
+        assert_eq!(output[1].permissions, MAP_READ | MAP_WRITE);
+    }
+
+    #[test]
+    fn combined_mapping_planner_rejects_virtual_collisions_and_bad_kernel_ranges() {
+        let kernel = [KernelPageMapping {
+            physical_start: 0x20_0000,
+            virtual_start: 0x30_0000,
+            page_count: 2,
+            permissions: MAP_READ | MAP_WRITE,
+        }];
+        let collision = [IdentityMappingRange {
+            physical_start: 0x30_1000,
+            length: 0x1000,
+            permissions: MAP_READ,
+        }];
+        let mut output = [KernelPageMapping::default(); 2];
+        assert_eq!(
+            plan_combined_page_mappings(&kernel, &collision, &mut output),
+            Err(CombinedMappingError::OverlappingMapping)
+        );
+
+        let invalid = [KernelPageMapping {
+            permissions: MAP_WRITE | MAP_EXECUTE,
+            ..kernel[0]
+        }];
+        assert_eq!(
+            plan_combined_page_mappings(&invalid, &[], &mut output),
+            Err(CombinedMappingError::InvalidKernelMapping)
+        );
+    }
+
+    #[test]
+    fn combined_mapping_planner_checks_capacity_and_address_overflow() {
+        let kernel = [KernelPageMapping {
+            physical_start: 0x20_0000,
+            virtual_start: 0x30_0000,
+            page_count: 1,
+            permissions: MAP_READ,
+        }];
+        let identity = [IdentityMappingRange {
+            physical_start: 0x40_0000,
+            length: UEFI_PAGE_SIZE,
+            permissions: MAP_READ,
+        }];
+        assert_eq!(
+            plan_combined_page_mappings(&kernel, &identity, &mut [KernelPageMapping::default(); 1]),
+            Err(CombinedMappingError::OutputTooSmall)
+        );
+
+        let overflowing = [KernelPageMapping {
+            virtual_start: u64::MAX - 0xfff,
+            ..kernel[0]
+        }];
+        assert_eq!(
+            plan_combined_page_mappings(&overflowing, &[], &mut [KernelPageMapping::default(); 1]),
+            Err(CombinedMappingError::AddressOverflow)
         );
     }
 
