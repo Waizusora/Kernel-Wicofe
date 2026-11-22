@@ -197,9 +197,9 @@ mod tests {
         ];
         assert_eq!(build_page_tables(&mut tables, &addresses, &mappings), Ok(4));
         let i = translation_table_indices(base).unwrap();
-        let l1 = ((tables[0][i[0]] & OUTPUT_ADDRESS_MASK) / PAGE_SIZE) as usize;
-        let l2 = ((tables[l1][i[1]] & OUTPUT_ADDRESS_MASK) / PAGE_SIZE) as usize;
-        let l3 = ((tables[l2][i[2]] & OUTPUT_ADDRESS_MASK) / PAGE_SIZE) as usize;
+        let l1 = addresses.iter().position(|address| *address == (tables[0][i[0]] & OUTPUT_ADDRESS_MASK)).unwrap();
+        let l2 = addresses.iter().position(|address| *address == (tables[l1][i[1]] & OUTPUT_ADDRESS_MASK)).unwrap();
+        let l3 = addresses.iter().position(|address| *address == (tables[l2][i[2]] & OUTPUT_ADDRESS_MASK)).unwrap();
         let text = tables[l3][i[3]];
         let data = tables[l3][i[3] + 1];
         assert_ne!(text & VALID, 0);

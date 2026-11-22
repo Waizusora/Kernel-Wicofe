@@ -175,9 +175,9 @@ mod tests {
         ];
         assert_eq!(build_page_tables(&mut tables, &addresses, &mappings), Ok(4));
         let i = page_table_indices(base).unwrap();
-        let pdpt = ((tables[0][i[0]] & PHYSICAL_ADDRESS_MASK) / PAGE_SIZE) as usize;
-        let pd = ((tables[pdpt][i[1]] & PHYSICAL_ADDRESS_MASK) / PAGE_SIZE) as usize;
-        let pt = ((tables[pd][i[2]] & PHYSICAL_ADDRESS_MASK) / PAGE_SIZE) as usize;
+        let pdpt = addresses.iter().position(|address| *address == (tables[0][i[0]] & PHYSICAL_ADDRESS_MASK)).unwrap();
+        let pd = addresses.iter().position(|address| *address == (tables[pdpt][i[1]] & PHYSICAL_ADDRESS_MASK)).unwrap();
+        let pt = addresses.iter().position(|address| *address == (tables[pd][i[2]] & PHYSICAL_ADDRESS_MASK)).unwrap();
         let text = tables[pt][i[3]];
         let data = tables[pt][i[3] + 1];
         assert_ne!(text & PRESENT, 0);
