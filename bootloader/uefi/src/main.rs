@@ -16,10 +16,10 @@ use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::{
-    KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, UEFI_PAGE_SIZE, UefiMemoryDescriptor,
-    decode_uefi_memory_descriptors, kernel_allocation_layout, page_table_allocation_layout,
-    plan_combined_page_mappings, plan_kernel_page_mappings, plan_pe_identity_mappings,
-    translate_uefi_memory_map, IdentityMappingRange, MAX_PE_IDENTITY_MAPPINGS,
+    IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAX_PE_IDENTITY_MAPPINGS,
+    UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors, kernel_allocation_layout,
+    page_table_allocation_layout, plan_combined_page_mappings, plan_kernel_page_mappings,
+    plan_pe_identity_mappings, translate_uefi_memory_map,
 };
 
 type Status = usize;
@@ -525,8 +525,8 @@ unsafe fn loaded_image_layout(
     // SAFETY: Loaded Image Protocol remains valid while Boot Services are active.
     let image_base = unsafe { (*loaded).image_base.cast::<u8>() };
     // SAFETY: Loaded Image Protocol remains valid while Boot Services are active.
-    let image_size = usize::try_from(unsafe { (*loaded).image_size })
-        .map_err(|_| EFI_INVALID_PARAMETER)?;
+    let image_size =
+        usize::try_from(unsafe { (*loaded).image_size }).map_err(|_| EFI_INVALID_PARAMETER)?;
     if image_base.is_null() || image_size == 0 {
         return Err(EFI_INVALID_PARAMETER);
     }
@@ -1038,19 +1038,16 @@ unsafe fn prepare_page_tables(
                     let combined_capacity = kernel_mapping_count
                         .checked_add(pe_mapping_count)
                         .ok_or(EFI_INVALID_PARAMETER)?;
-                    let combined =
-                        unsafe { allocate_array::<KernelPageMapping>(services, combined_capacity)? };
+                    let combined = unsafe {
+                        allocate_array::<KernelPageMapping>(services, combined_capacity)?
+                    };
                     let combined_result = (|| {
                         // SAFETY: combined has combined_capacity writable entries.
-                        let combined_output = unsafe {
-                            core::slice::from_raw_parts_mut(combined, combined_capacity)
-                        };
-                        let combined_count = plan_combined_page_mappings(
-                            kernel_mappings,
-                            ranges,
-                            combined_output,
-                        )
-                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        let combined_output =
+                            unsafe { core::slice::from_raw_parts_mut(combined, combined_capacity) };
+                        let combined_count =
+                            plan_combined_page_mappings(kernel_mappings, ranges, combined_output)
+                                .map_err(|_| EFI_INVALID_PARAMETER)?;
                         // SAFETY: only the initialized combined mappings are exposed.
                         let combined_slice =
                             unsafe { core::slice::from_raw_parts(combined, combined_count) };
