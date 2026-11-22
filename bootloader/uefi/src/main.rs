@@ -1138,7 +1138,7 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
         Ok((kernel, tables)) => {
             // SAFETY: boot services remain active. The prepared allocations are
             // retained and no firmware allocations occur after the final map call.
-            let prepared = match unsafe { prepare_boot_info(&*boot_services, kernel) } {
+            let mut prepared = match unsafe { prepare_boot_info(&*boot_services, kernel) } {
                 Ok(value) => value,
                 Err(status) => {
                     let _ = print_message(system_table, ERROR_MESSAGE);
@@ -1159,10 +1159,11 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
             let console_status = print_message(system_table, LOADED_MESSAGE);
             // SAFETY: all storage is retained; this refresh performs no allocation.
             if let Err(status) =
-                unsafe { refresh_prepared_boot_info(&*boot_services, &mut {prepared}) }
+                unsafe { refresh_prepared_boot_info(&*boot_services, &mut prepared) }
             {
                 return status;
             }
+            let _refreshed_map_key = prepared.map_key;
             console_status
         }
         Err(_) => {
