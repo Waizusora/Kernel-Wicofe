@@ -217,8 +217,14 @@ remainder of each segment supplies BSS. Unused prefix and suffix pages are
 released when possible. The temporary file buffer and file handles are
 released after the copy.
 
-This stage does not yet establish page tables or map the physical span at
-the kernel's linked virtual base. It also does not create the bootstrap
-stack, capture the final memory map, call ExitBootServices, or transfer
-control to the kernel. A successful CI build proves PE/COFF compilation
+WBL now allocates a separate UEFI page-table pool and invokes the
+architecture-specific four-level builder for the kernel PT_LOAD mappings.
+The pool is retained on success, and its root physical address and used
+table count are recorded internally. The tables remain inactive: WBL does
+not load CR3, program AArch64 MAIR/TCR/TTBR state, or establish identity
+mappings for its own code, stack, firmware tables, and handoff buffers.
+Consequently, this does not yet make the kernel image accessible at its
+linked virtual base. WBL also does not create the bootstrap stack, capture
+the final memory map, call ExitBootServices, or transfer control to the
+kernel. A successful CI build proves PE/COFF compilation
 only; it does not prove execution on firmware or QEMU.
