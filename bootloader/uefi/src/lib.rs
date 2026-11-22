@@ -168,6 +168,79 @@ pub fn plan_kernel_page_mappings(
     Ok(count)
 }
 
+/// Errors while translating ELF permissions into architecture page mappings.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MappingConversionError {
+    OutputTooSmall,
+    UnsupportedPermissions,
+}
+
+/// Validate permissions shared by both architecture page-table builders.
+fn mapping_access(permissions: u32) -> Result<(bool, bool), MappingConversionError> {
+    if permissions & !(MAP_READ | MAP_WRITE | MAP_EXECUTE) != 0
+        || permissions & MAP_READ == 0
+        || permissions & (MAP_WRITE | MAP_EXECUTE) == (MAP_WRITE | MAP_EXECUTE)
+    {
+        return Err(MappingConversionError::UnsupportedPermissions);
+    }
+    Ok((
+        permissions & MAP_WRITE != 0,
+        permissions & MAP_EXECUTE != 0,
+    ))
+}
+
+/// Translate planned ELF mappings into the x86-64 page-table builder input.
+#[cfg(target_arch = "x86_64")]
+pub fn convert_kernel_page_mappings(
+    mappings: &[KernelPageMapping],
+    output: &mut [wicofe_kernel_x86_64::paging::PageMapping],
+) -> Result<usize, MappingConversionError> {
+    if output.len() < mappings.len() {
+        return Err(MappingConversionError::OutputTooSmall);
+    }
+    for (index, mapping) in mappings.iter().enumerate() {
+        let (writable, executable) = mapping_access(mapping.permissions)?;
+        output[index] = wicofe_kernel_x86_64::paging::PageMapping {
+            virtual_start: mapping.virtual_start,
+            physical_start: mapping.physical_start,
+            page_count: mapping.page_count,
+            writable,
+            executable,
+        };
+    }
+    Ok(mappings.len())
+}
+
+/// Translate planned ELF mappings into the AArch64 translation-table input.
+///
+/// The MAIR attribute index is supplied by the caller; this conversion does
+/// not program MAIR_EL1 or enable the MMU.
+#[cfg(target_arch = "aarch64")]
+pub fn convert_kernel_page_mappings(
+    mappings: &[KernelPageMapping],
+    attribute_index: u8,
+    output: &mut [wicofe_kernel_aarch64::paging::PageMapping],
+) -> Result<usize, MappingConversionError> {
+    if output.len() < mappings.len() {
+        return Err(MappingConversionError::OutputTooSmall);
+    }
+    if attribute_index >= 8 {
+        return Err(MappingConversionError::UnsupportedPermissions);
+    }
+    for (index, mapping) in mappings.iter().enumerate() {
+        let (writable, executable) = mapping_access(mapping.permissions)?;
+        output[index] = wicofe_kernel_aarch64::paging::PageMapping {
+            virtual_start: mapping.virtual_start,
+            physical_start: mapping.physical_start,
+            page_count: mapping.page_count,
+            writable,
+            executable,
+            attribute_index,
+        };
+    }
+    Ok(mappings.len())
+}
+
 /// UEFI removable-media fallback path for x86-64 firmware.
 pub const X86_64_FALLBACK_PATH: &str = r"\EFI\BOOT\BOOTX64.EFI";
 
@@ -201,6 +274,48 @@ mod tests {
     fn page_table_allocation_layout_rejects_zero_and_overflow() {
         assert_eq!(page_table_allocation_layout(0), None);
         assert_eq!(page_table_allocation_layout(usize::MAX), None);
+    }
+
+    #[test]
+    fn mapping_access_rejects_unrepresentable_permissions() {
+        assert_eq!(
+            mapping_access(MAP_WRITE | MAP_EXECUTE),
+            Err(MappingConversionError::UnsupportedPermissions)
+        );
+        assert_eq!(
+            mapping_access(MAP_WRITE),
+            Err(MappingConversionError::UnsupportedPermissions)
+        );
+        assert_eq!(
+            mapping_access(MAP_READ | (1 << 8)),
+            Err(MappingConversionError::UnsupportedPermissions)
+        );
+        assert_eq!(mapping_access(MAP_READ | MAP_EXECUTE), Ok((false, true)));
+        assert_eq!(mapping_access(MAP_READ | MAP_WRITE), Ok((true, false)));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn converts_kernel_mappings_for_x86_64_builder() {
+        let source = [KernelPageMapping {
+            physical_start: 0x20_0000,
+            virtual_start: 0xffff_ffff_8000_0000,
+            page_count: 2,
+            permissions: MAP_READ | MAP_EXECUTE,
+        }];
+        let mut output = [wicofe_kernel_x86_64::paging::PageMapping {
+            virtual_start: 0,
+            physical_start: 0,
+            page_count: 0,
+            writable: false,
+            executable: false,
+        }; 1];
+        assert_eq!(convert_kernel_page_mappings(&source, &mut output), Ok(1));
+        assert_eq!(output[0].physical_start, source[0].physical_start);
+        assert_eq!(output[0].virtual_start, source[0].virtual_start);
+        assert_eq!(output[0].page_count, 2);
+        assert!(!output[0].writable);
+        assert!(output[0].executable);
     }
 
     #[test]
