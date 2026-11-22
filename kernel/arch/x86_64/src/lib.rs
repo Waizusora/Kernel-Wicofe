@@ -1,7 +1,8 @@
 #![no_std]
 
-//! x86_64-specific kernel boundary. CPU setup and assembly routines are not
-//! implemented in this initial workspace scaffold.
+//! x86_64-specific kernel boundary and paging primitives.
+
+pub mod paging;
 
 /// Architecture identifier used by the WBL handoff protocol.
 pub const ARCHITECTURE_ID: u32 = 1;

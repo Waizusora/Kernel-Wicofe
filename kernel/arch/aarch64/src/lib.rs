@@ -1,7 +1,8 @@
 #![no_std]
 
-//! AArch64-specific kernel boundary. Exception-level setup and assembly
-//! routines are not implemented in this initial workspace scaffold.
+//! AArch64-specific kernel boundary and translation-table primitives.
+
+pub mod paging;
 
 /// Architecture identifier used by the WBL handoff protocol.
 pub const ARCHITECTURE_ID: u32 = 2;
