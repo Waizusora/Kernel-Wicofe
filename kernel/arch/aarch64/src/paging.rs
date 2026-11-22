@@ -113,8 +113,8 @@ pub fn required_table_capacity(mappings: &[PageMapping]) -> Result<usize, Paging
         for shift in [39_u32, 30, 21] {
             let first = mapping.virtual_start >> shift;
             let last = last_address >> shift;
-            let count = usize::try_from(last - first + 1)
-                .map_err(|_| PagingError::AddressOverflow)?;
+            let count =
+                usize::try_from(last - first + 1).map_err(|_| PagingError::AddressOverflow)?;
             capacity = capacity
                 .checked_add(count)
                 .ok_or(PagingError::AddressOverflow)?;

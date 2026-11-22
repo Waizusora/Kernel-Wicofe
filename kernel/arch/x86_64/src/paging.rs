@@ -94,21 +94,20 @@ pub fn required_table_capacity(mappings: &[PageMapping]) -> Result<usize, Paging
             .virtual_start
             .checked_add(last_offset)
             .ok_or(PagingError::AddressOverflow)?;
-        let first_indexes = page_table_indices(mapping.virtual_start)?;
-        let last_indexes = page_table_indices(last_address)?;
+        page_table_indices(mapping.virtual_start)?;
+        page_table_indices(last_address)?;
         if ((mapping.virtual_start >> 47) & 1) != ((last_address >> 47) & 1) {
             return Err(PagingError::NonCanonicalVirtualAddress);
         }
         for shift in [39_u32, 30, 21] {
             let first = mapping.virtual_start >> shift;
             let last = last_address >> shift;
-            let count = usize::try_from(last - first + 1)
-                .map_err(|_| PagingError::AddressOverflow)?;
+            let count =
+                usize::try_from(last - first + 1).map_err(|_| PagingError::AddressOverflow)?;
             capacity = capacity
                 .checked_add(count)
                 .ok_or(PagingError::AddressOverflow)?;
         }
-        let _ = (first_indexes, last_indexes);
     }
     Ok(capacity)
 }
