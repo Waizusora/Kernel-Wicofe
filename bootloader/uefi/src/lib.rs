@@ -135,10 +135,10 @@ pub fn plan_kernel_page_mappings(
 }
 
 /// UEFI removable-media fallback path for x86-64 firmware.
-pub const X86_64_FALLBACK_PATH: &str = r"\\EFI\\BOOT\\BOOTX64.EFI";
+pub const X86_64_FALLBACK_PATH: &str = r"\EFI\BOOT\BOOTX64.EFI";
 
 /// UEFI removable-media fallback path for AArch64 firmware.
-pub const AARCH64_FALLBACK_PATH: &str = r"\\EFI\\BOOT\\BOOTAA64.EFI";
+pub const AARCH64_FALLBACK_PATH: &str = r"\EFI\BOOT\BOOTAA64.EFI";
 
 #[cfg(test)]
 mod tests {
