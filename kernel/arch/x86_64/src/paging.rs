@@ -72,6 +72,47 @@ pub fn page_table_indices(virtual_address: u64) -> Result<[usize; 4], PagingErro
     ])
 }
 
+/// Return a safe upper bound for the number of 4 KiB tables needed.
+///
+/// The count includes the root table and every intermediate table touched by
+/// each mapping. Shared intermediate tables across separate mappings may be
+/// counted more than once; the result is therefore suitable for allocation
+/// without requiring a heap-backed set.
+pub fn required_table_capacity(mappings: &[PageMapping]) -> Result<usize, PagingError> {
+    let mut capacity = 1usize;
+    for mapping in mappings {
+        if mapping.page_count == 0 {
+            return Err(PagingError::AddressOverflow);
+        }
+        if mapping.virtual_start % PAGE_SIZE != 0 {
+            return Err(PagingError::MisalignedAddress);
+        }
+        let last_offset = (mapping.page_count - 1)
+            .checked_mul(PAGE_SIZE)
+            .ok_or(PagingError::AddressOverflow)?;
+        let last_address = mapping
+            .virtual_start
+            .checked_add(last_offset)
+            .ok_or(PagingError::AddressOverflow)?;
+        let first_indexes = page_table_indices(mapping.virtual_start)?;
+        let last_indexes = page_table_indices(last_address)?;
+        if ((mapping.virtual_start >> 47) & 1) != ((last_address >> 47) & 1) {
+            return Err(PagingError::NonCanonicalVirtualAddress);
+        }
+        for shift in [39_u32, 30, 21] {
+            let first = mapping.virtual_start >> shift;
+            let last = last_address >> shift;
+            let count = usize::try_from(last - first + 1)
+                .map_err(|_| PagingError::AddressOverflow)?;
+            capacity = capacity
+                .checked_add(count)
+                .ok_or(PagingError::AddressOverflow)?;
+        }
+        let _ = (first_indexes, last_indexes);
+    }
+    Ok(capacity)
+}
+
 /// Build mappings into a caller-provided pool of zeroed 4 KiB tables.
 /// Address zero in the physical-address slice is the root PML4.
 pub fn build_page_tables(
@@ -157,6 +198,36 @@ mod tests {
             .iter()
             .position(|address| *address == (entry & PHYSICAL_ADDRESS_MASK))
             .unwrap()
+    }
+
+    #[test]
+    fn table_capacity_covers_all_intermediate_tables() {
+        let base = 0xffff_ffff_8000_0000;
+        let mappings = [
+            PageMapping {
+                virtual_start: base,
+                physical_start: 0x20_0000,
+                page_count: 513,
+                writable: false,
+                executable: true,
+            },
+            PageMapping {
+                virtual_start: base + 0x20_1000,
+                physical_start: 0x40_0000,
+                page_count: 1,
+                writable: true,
+                executable: false,
+            },
+        ];
+        let capacity = required_table_capacity(&mappings).unwrap();
+        assert!(capacity >= 5);
+        assert_eq!(
+            required_table_capacity(&[PageMapping {
+                page_count: 0,
+                ..mappings[0]
+            }]),
+            Err(PagingError::AddressOverflow)
+        );
     }
 
     #[test]
