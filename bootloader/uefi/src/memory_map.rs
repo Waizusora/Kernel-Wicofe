@@ -1,6 +1,6 @@
 //! Firmware-independent translation of UEFI memory descriptors into WBL's canonical map.
 
-use wicofe_bootloader_common::{memory_attribute, memory_kind, MemoryRegion};
+use wicofe_bootloader_common::{MemoryRegion, memory_attribute, memory_kind};
 
 pub const EFI_PAGE_SIZE: u64 = 4096;
 
@@ -152,7 +152,12 @@ pub fn translate_uefi_memory_map(
 mod tests {
     use super::*;
 
-    fn descriptor(memory_type: u32, start: u64, pages: u64, attribute: u64) -> UefiMemoryDescriptor {
+    fn descriptor(
+        memory_type: u32,
+        start: u64,
+        pages: u64,
+        attribute: u64,
+    ) -> UefiMemoryDescriptor {
         UefiMemoryDescriptor {
             memory_type,
             physical_start: start,
@@ -167,7 +172,12 @@ mod tests {
         let input = [
             descriptor(EFI_CONVENTIONAL_MEMORY, 0x1000, 4, EFI_MEMORY_WB),
             descriptor(EFI_LOADER_DATA, 0x5000, 2, EFI_MEMORY_WB),
-            descriptor(EFI_RUNTIME_SERVICES_DATA, 0x7000, 1, EFI_MEMORY_WT | EFI_MEMORY_RUNTIME),
+            descriptor(
+                EFI_RUNTIME_SERVICES_DATA,
+                0x7000,
+                1,
+                EFI_MEMORY_WT | EFI_MEMORY_RUNTIME,
+            ),
             descriptor(EFI_MEMORY_MAPPED_IO, 0x8000, 1, EFI_MEMORY_UC),
             descriptor(0xffff, 0x9000, 1, 0),
         ];
@@ -178,7 +188,10 @@ mod tests {
         assert_eq!(output[0].attributes, memory_attribute::CACHE_WRITE_BACK);
         assert_eq!(output[1].kind, memory_kind::BOOTLOADER_RECLAIM);
         assert_eq!(output[2].kind, memory_kind::FIRMWARE_RUNTIME);
-        assert_eq!(output[2].attributes, memory_attribute::CACHE_WRITE_THROUGH | memory_attribute::RUNTIME);
+        assert_eq!(
+            output[2].attributes,
+            memory_attribute::CACHE_WRITE_THROUGH | memory_attribute::RUNTIME
+        );
         assert_eq!(output[3].kind, memory_kind::MMIO);
         assert_eq!(output[4].kind, memory_kind::RESERVED);
     }
@@ -199,11 +212,17 @@ mod tests {
     fn rejects_empty_misaligned_overlapping_and_overflowing_descriptors() {
         let mut output = [MemoryRegion::default(); 2];
         assert_eq!(
-            translate_uefi_memory_map(&[descriptor(EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 0)], &mut output),
+            translate_uefi_memory_map(
+                &[descriptor(EFI_CONVENTIONAL_MEMORY, 0x1000, 0, 0)],
+                &mut output
+            ),
             Err(MemoryMapError::EmptyDescriptor)
         );
         assert_eq!(
-            translate_uefi_memory_map(&[descriptor(EFI_CONVENTIONAL_MEMORY, 0x1001, 1, 0)], &mut output),
+            translate_uefi_memory_map(
+                &[descriptor(EFI_CONVENTIONAL_MEMORY, 0x1001, 1, 0)],
+                &mut output
+            ),
             Err(MemoryMapError::MisalignedPhysicalAddress)
         );
         let overlap = [
@@ -223,7 +242,12 @@ mod tests {
 
     #[test]
     fn rejects_conflicting_cache_attributes_and_small_output() {
-        let conflicting = [descriptor(EFI_CONVENTIONAL_MEMORY, 0x1000, 1, EFI_MEMORY_WB | EFI_MEMORY_UC)];
+        let conflicting = [descriptor(
+            EFI_CONVENTIONAL_MEMORY,
+            0x1000,
+            1,
+            EFI_MEMORY_WB | EFI_MEMORY_UC,
+        )];
         let mut output = [MemoryRegion::default(); 1];
         assert_eq!(
             translate_uefi_memory_map(&conflicting, &mut output),
