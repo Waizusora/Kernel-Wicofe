@@ -191,6 +191,20 @@ mod tests {
     }
 
     #[test]
+    fn page_table_allocation_layout_matches_table_count() {
+        let layout = page_table_allocation_layout(7).unwrap();
+        assert_eq!(layout.table_count, 7);
+        assert_eq!(layout.allocation_pages, 7);
+        assert_eq!(layout.allocation_size, 7 * UEFI_PAGE_SIZE);
+    }
+
+    #[test]
+    fn page_table_allocation_layout_rejects_zero_and_overflow() {
+        assert_eq!(page_table_allocation_layout(0), None);
+        assert_eq!(page_table_allocation_layout(usize::MAX), None);
+    }
+
+    #[test]
     fn fallback_names_match_uefi_architecture_conventions() {
         assert!(X86_64_FALLBACK_PATH.ends_with("BOOTX64.EFI"));
         assert!(AARCH64_FALLBACK_PATH.ends_with("BOOTAA64.EFI"));
