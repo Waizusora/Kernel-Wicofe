@@ -3,6 +3,7 @@
 
 use core::ffi::c_void;
 use core::panic::PanicInfo;
+use wicofe_bootloader_common::MemoryRegion;
 #[cfg(target_arch = "aarch64")]
 use wicofe_bootloader_elf::EM_AARCH64;
 #[cfg(target_arch = "x86_64")]
@@ -12,7 +13,6 @@ use wicofe_bootloader_elf::{ElfImage, LoadSegment};
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
-use wicofe_bootloader_common::MemoryRegion;
 use wicofe_bootloader_uefi::{
     KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, UEFI_PAGE_SIZE, UefiMemoryDescriptor,
     decode_uefi_memory_descriptors, kernel_allocation_layout, page_table_allocation_layout,
@@ -96,13 +96,8 @@ struct SystemTable {
 type HandleProtocolFn = unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void) -> Status;
 type AllocatePagesFn = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
 type FreePagesFn = unsafe extern "efiapi" fn(u64, usize) -> Status;
-type GetMemoryMapFn = unsafe extern "efiapi" fn(
-    *mut usize,
-    *mut c_void,
-    *mut usize,
-    *mut usize,
-    *mut u32,
-) -> Status;
+type GetMemoryMapFn =
+    unsafe extern "efiapi" fn(*mut usize, *mut c_void, *mut usize, *mut usize, *mut u32) -> Status;
 type AllocatePoolFn = unsafe extern "efiapi" fn(u32, usize, *mut *mut c_void) -> Status;
 type FreePoolFn = unsafe extern "efiapi" fn(*mut c_void) -> Status;
 #[repr(C)]
@@ -216,9 +211,7 @@ unsafe fn free_pool(services: &BootServices, buffer: *mut c_void) {
 /// The map is not handed to the kernel yet. This stage verifies the live UEFI
 /// descriptor stride and the translator against an actual firmware snapshot.
 unsafe fn validate_firmware_memory_map(services: &BootServices) -> Result<usize, Status> {
-    let get_memory_map = services
-        .get_memory_map
-        .ok_or(EFI_INVALID_PARAMETER)?;
+    let get_memory_map = services.get_memory_map.ok_or(EFI_INVALID_PARAMETER)?;
     let mut required_size = 0usize;
     let mut map_key = 0usize;
     let mut descriptor_size = 0usize;
@@ -315,32 +308,21 @@ unsafe fn validate_firmware_memory_map(services: &BootServices) -> Result<usize,
                 unsafe { allocate_array::<UefiMemoryDescriptor>(services, descriptor_count)? };
             let decode_result = (|| {
                 // SAFETY: buffer contains map_size initialized firmware bytes.
-                let raw_map = unsafe {
-                    core::slice::from_raw_parts(buffer.cast::<u8>(), map_size)
-                };
+                let raw_map = unsafe { core::slice::from_raw_parts(buffer.cast::<u8>(), map_size) };
                 // SAFETY: descriptors has descriptor_count aligned writable entries.
-                let decoded = unsafe {
-                    core::slice::from_raw_parts_mut(descriptors, descriptor_count)
-                };
-                let decoded_count = decode_uefi_memory_descriptors(
-                    raw_map,
-                    descriptor_size,
-                    decoded,
-                )
-                .map_err(|_| EFI_INVALID_PARAMETER)?;
-                let regions =
-                    unsafe { allocate_array::<MemoryRegion>(services, decoded_count)? };
+                let decoded =
+                    unsafe { core::slice::from_raw_parts_mut(descriptors, descriptor_count) };
+                let decoded_count =
+                    decode_uefi_memory_descriptors(raw_map, descriptor_size, decoded)
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                let regions = unsafe { allocate_array::<MemoryRegion>(services, decoded_count)? };
                 let translate_result = (|| {
                     // SAFETY: only decoded_count descriptor entries were initialized.
-                    let decoded = unsafe {
-                        core::slice::from_raw_parts(descriptors, decoded_count)
-                    };
+                    let decoded =
+                        unsafe { core::slice::from_raw_parts(descriptors, decoded_count) };
                     // SAFETY: regions has decoded_count aligned writable entries.
-                    let output = unsafe {
-                        core::slice::from_raw_parts_mut(regions, decoded_count)
-                    };
-                    translate_uefi_memory_map(decoded, output)
-                        .map_err(|_| EFI_INVALID_PARAMETER)
+                    let output = unsafe { core::slice::from_raw_parts_mut(regions, decoded_count) };
+                    translate_uefi_memory_map(decoded, output).map_err(|_| EFI_INVALID_PARAMETER)
                 })();
                 // SAFETY: regions was allocated above.
                 unsafe { free_pool(services, regions.cast()) };
