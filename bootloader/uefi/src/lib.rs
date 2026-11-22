@@ -724,3 +724,6 @@ mod tests {
         );
     }
 }
+
+mod memory_map;
+pub use memory_map::{MemoryMapError, UefiMemoryDescriptor, translate_uefi_memory_map};
