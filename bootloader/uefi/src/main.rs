@@ -1133,6 +1133,9 @@ unsafe fn build_architecture_page_tables(
                 Ok(PreparedPageTables {
                     root_physical_address: table_base,
                     used_table_count: used,
+                    bootstrap_stack_base: 0,
+                    bootstrap_stack_top: 0,
+                    bootstrap_stack_pages: 0,
                 })
             })();
             // SAFETY: addresses was allocated above.
