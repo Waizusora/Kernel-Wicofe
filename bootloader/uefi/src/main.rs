@@ -17,10 +17,9 @@ use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::{
     IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ,
-    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor,
-    decode_uefi_memory_descriptors, kernel_allocation_layout,
-    page_table_allocation_layout, plan_combined_page_mappings, plan_kernel_page_mappings,
-    plan_pe_identity_mappings, translate_uefi_memory_map,
+    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
+    kernel_allocation_layout, page_table_allocation_layout, plan_combined_page_mappings,
+    plan_kernel_page_mappings, plan_pe_identity_mappings, translate_uefi_memory_map,
 };
 
 type Status = usize;
@@ -1087,12 +1086,9 @@ unsafe fn prepare_page_tables(
                         // SAFETY: combined has combined_capacity writable entries.
                         let combined_output =
                             unsafe { core::slice::from_raw_parts_mut(combined, combined_capacity) };
-                        let combined_count = plan_combined_page_mappings(
-                            kernel_mappings,
-                            ranges,
-                            combined_output,
-                        )
-                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        let combined_count =
+                            plan_combined_page_mappings(kernel_mappings, ranges, combined_output)
+                                .map_err(|_| EFI_INVALID_PARAMETER)?;
                         // SAFETY: only the initialized combined mappings are exposed.
                         let combined_slice =
                             unsafe { core::slice::from_raw_parts(combined, combined_count) };
