@@ -4,7 +4,8 @@
 use core::ffi::c_void;
 use core::panic::PanicInfo;
 use wicofe_bootloader_common::{
-    BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BootInfo, MemoryRegion, architecture, validate_boot_info,
+    BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BOOTSTRAP_STACK_LAYOUT, BootInfo, MemoryRegion,
+    architecture, bootstrap_stack_top, validate_boot_info,
 };
 #[cfg(target_arch = "aarch64")]
 use wicofe_bootloader_elf::EM_AARCH64;
@@ -846,6 +847,77 @@ unsafe fn load_segments(
 struct PreparedPageTables {
     root_physical_address: u64,
     used_table_count: usize,
+    bootstrap_stack_base: u64,
+    bootstrap_stack_top: u64,
+    bootstrap_stack_pages: usize,
+}
+
+#[derive(Clone, Copy)]
+struct BootstrapStackAllocation {
+    stack_base: u64,
+    stack_top: u64,
+    allocation_base: u64,
+    allocation_pages: usize,
+}
+
+unsafe fn allocate_bootstrap_stack(
+    services: &BootServices,
+) -> Result<BootstrapStackAllocation, Status> {
+    let allocation_size = BOOTSTRAP_STACK_LAYOUT.allocation_size;
+    let page_count = allocation_size
+        .checked_div(UEFI_PAGE_SIZE)
+        .filter(|_| allocation_size % UEFI_PAGE_SIZE == 0)
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|count| *count != 0)
+        .ok_or(EFI_INVALID_PARAMETER)?;
+    let allocate = services.allocate_pages.ok_or(EFI_INVALID_PARAMETER)?;
+    let release = services.free_pages.ok_or(EFI_INVALID_PARAMETER)?;
+    let mut base = 0_u64;
+    // SAFETY: AllocatePages receives a checked page count and valid output pointer.
+    let status = unsafe { allocate(0, EFI_LOADER_DATA, page_count, &mut base) };
+    if is_error(status) {
+        return Err(status);
+    }
+    let stack_top = match bootstrap_stack_top(base) {
+        Some(value) => value,
+        None => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(base, page_count) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let stack_base = match base.checked_add(BOOTSTRAP_STACK_LAYOUT.guard_size) {
+        Some(value) if value < stack_top => value,
+        _ => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(base, page_count) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let allocation_bytes = match usize::try_from(allocation_size) {
+        Ok(value) => value,
+        Err(_) => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(base, page_count) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    let base_pointer = match usize::try_from(base) {
+        Ok(value) => value as *mut u8,
+        Err(_) => {
+            // SAFETY: release the complete allocation returned by firmware.
+            let _ = unsafe { release(base, page_count) };
+            return Err(EFI_INVALID_PARAMETER);
+        }
+    };
+    // SAFETY: the complete page allocation is writable and exclusively owned by WBL.
+    unsafe { core::ptr::write_bytes(base_pointer, 0, allocation_bytes) };
+    Ok(BootstrapStackAllocation {
+        stack_base,
+        stack_top,
+        allocation_base: base,
+        allocation_pages: page_count,
+    })
 }
 
 unsafe fn allocate_array<T>(services: &BootServices, count: usize) -> Result<*mut T, Status> {
@@ -962,6 +1034,9 @@ unsafe fn build_architecture_page_tables(
                 Ok(PreparedPageTables {
                     root_physical_address: table_base,
                     used_table_count: used,
+                    bootstrap_stack_base: 0,
+                    bootstrap_stack_top: 0,
+                    bootstrap_stack_pages: 0,
                 })
             })();
             // SAFETY: addresses was allocated above.
@@ -1086,6 +1161,14 @@ unsafe fn prepare_page_tables(
 ) -> Result<PreparedPageTables, Status> {
     let segment_capacity = usize::from(parsed.program_header_count());
     let segments = unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
+    let bootstrap_stack = match unsafe { allocate_bootstrap_stack(services) } {
+        Ok(stack) => stack,
+        Err(status) => {
+            // SAFETY: segments was allocated immediately above.
+            unsafe { free_pool(services, segments.cast()) };
+            return Err(status);
+        }
+    };
     let result = (|| {
         let mut segment_count = 0usize;
         for index in 0..parsed.program_header_count() {
@@ -1133,7 +1216,7 @@ unsafe fn prepare_page_tables(
                     unsafe { core::slice::from_raw_parts(pe_mappings, pe_mapping_count) };
 
                 let identity_capacity = pe_mapping_count
-                    .checked_add(2)
+                    .checked_add(3)
                     .ok_or(EFI_INVALID_PARAMETER)?;
                 let identity_ranges =
                     unsafe { allocate_array::<IdentityMappingRange>(services, identity_capacity)? };
@@ -1182,6 +1265,11 @@ unsafe fn prepare_page_tables(
                         permissions: MAP_READ,
                     };
                     ranges[pe_mapping_count + 1] = active_stack_mapping(prepared_boot_info)?;
+                    ranges[pe_mapping_count + 2] = IdentityMappingRange {
+                        physical_start: bootstrap_stack.stack_base,
+                        length: BOOTSTRAP_STACK_LAYOUT.stack_size,
+                        permissions: MAP_READ | MAP_WRITE,
+                    };
 
                     let combined_capacity = kernel_mapping_count
                         .checked_add(identity_capacity)
@@ -1219,7 +1307,25 @@ unsafe fn prepare_page_tables(
     })();
     // SAFETY: segments was allocated above.
     unsafe { free_pool(services, segments.cast()) };
-    result
+    match result {
+        Ok(mut tables) => {
+            tables.bootstrap_stack_base = bootstrap_stack.stack_base;
+            tables.bootstrap_stack_top = bootstrap_stack.stack_top;
+            tables.bootstrap_stack_pages = bootstrap_stack.allocation_pages;
+            Ok(tables)
+        }
+        Err(status) => {
+            // SAFETY: release the complete stack allocation after page-table preparation failed.
+            unsafe {
+                free_pages(
+                    services,
+                    bootstrap_stack.allocation_base,
+                    bootstrap_stack.allocation_pages,
+                )
+            };
+            Err(status)
+        }
+    }
 }
 
 fn copy_segment(
@@ -1405,6 +1511,9 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
                 kernel.entry,
                 tables.root_physical_address,
                 tables.used_table_count,
+                tables.bootstrap_stack_base,
+                tables.bootstrap_stack_top,
+                tables.bootstrap_stack_pages,
             );
             let console_status = print_message(system_table, LOADED_MESSAGE);
             // SAFETY: all storage is retained; this refresh performs no allocation.
