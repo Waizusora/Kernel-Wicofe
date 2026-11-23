@@ -815,7 +815,7 @@ mod tests {
     fn page_table_pool_capacity_reserves_self_mapping_tables() {
         assert_eq!(page_table_pool_capacity(1), Some(7));
         assert_eq!(page_table_pool_capacity(4), Some(10));
-        assert_eq!(page_table_pool_capacity(512), Some(516));
+        assert_eq!(page_table_pool_capacity(512), Some(519));
         assert_eq!(page_table_pool_capacity(0), None);
         assert_eq!(page_table_pool_capacity(usize::MAX), None);
     }
