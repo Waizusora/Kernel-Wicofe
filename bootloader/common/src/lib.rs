@@ -269,7 +269,7 @@ mod tests {
         assert_eq!(bootstrap_stack_top(0), None);
         assert_eq!(bootstrap_stack_top(0x1001), None);
         assert_eq!(
-            bootstrap_stack_top(u64::MAX & !(BOOTSTRAP_STACK_PAGE_SIZE - 1)),
+            bootstrap_stack_top(!(BOOTSTRAP_STACK_PAGE_SIZE - 1)),
             None
         );
     }
