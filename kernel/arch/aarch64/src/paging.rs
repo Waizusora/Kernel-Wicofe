@@ -75,7 +75,8 @@ pub fn encode_page(
 
 /// Return level-0 through level-3 indexes for a canonical 48-bit VA.
 pub fn translation_table_indices(virtual_address: u64) -> Result<[usize; 4], PagingError> {
-    if virtual_address >> 48 != 0xffff {
+    let upper = virtual_address >> 48;
+    if upper != 0 && upper != 0xffff {
         return Err(PagingError::NonCanonicalVirtualAddress);
     }
     Ok([
@@ -246,6 +247,44 @@ mod tests {
             }]),
             Err(PagingError::AddressOverflow)
         );
+    }
+
+    #[test]
+    fn accepts_low_and_high_canonical_addresses() {
+        assert_eq!(
+            translation_table_indices(0x0000_0000_4000_0000),
+            Ok([0, 1, 0, 0])
+        );
+        assert_eq!(
+            translation_table_indices(0xffff_0000_4000_0000),
+            Ok([0x1fe, 1, 0, 0])
+        );
+        assert_eq!(
+            translation_table_indices(0x0001_0000_0000_0000),
+            Err(PagingError::NonCanonicalVirtualAddress)
+        );
+    }
+
+    #[test]
+    fn builds_low_half_identity_mapping() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mapping = PageMapping {
+            virtual_start: 0x4000_0000,
+            physical_start: 0x4000_0000,
+            page_count: 1,
+            writable: true,
+            executable: false,
+            attribute_index: 0,
+        };
+        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        let indexes = translation_table_indices(mapping.virtual_start).unwrap();
+        let l1 = table_index(&addresses, tables[0][indexes[0]]);
+        let l2 = table_index(&addresses, tables[l1][indexes[1]]);
+        let l3 = table_index(&addresses, tables[l2][indexes[2]]);
+        let leaf = tables[l3][indexes[3]];
+        assert_eq!(leaf & OUTPUT_ADDRESS_MASK, mapping.physical_start);
+        assert_ne!(leaf & VALID, 0);
     }
 
     #[test]
