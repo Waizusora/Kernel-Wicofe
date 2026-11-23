@@ -5,6 +5,38 @@
 pub const BOOT_INFO_MAGIC: u64 = 0x5749_434F_4645_4249;
 pub const BOOT_INFO_VERSION: u32 = 2;
 pub const KERNEL_IMAGE_ALIGNMENT: u64 = 2 * 1024 * 1024;
+pub const BOOTSTRAP_STACK_PAGE_SIZE: u64 = 4096;
+pub const BOOTSTRAP_STACK_GUARD_SIZE: u64 = BOOTSTRAP_STACK_PAGE_SIZE;
+pub const BOOTSTRAP_STACK_SIZE: u64 = 64 * 1024;
+pub const BOOTSTRAP_STACK_ALIGNMENT: u64 = 16;
+
+/// Fixed physical allocation layout for the initial kernel stack.
+///
+/// The first page is deliberately excluded from the usable stack and remains
+/// unmapped as a guard. The stack grows down from the allocation end.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BootstrapStackLayout {
+    pub guard_size: u64,
+    pub stack_size: u64,
+    pub allocation_size: u64,
+}
+
+pub const BOOTSTRAP_STACK_LAYOUT: BootstrapStackLayout = BootstrapStackLayout {
+    guard_size: BOOTSTRAP_STACK_GUARD_SIZE,
+    stack_size: BOOTSTRAP_STACK_SIZE,
+    allocation_size: BOOTSTRAP_STACK_GUARD_SIZE + BOOTSTRAP_STACK_SIZE,
+};
+
+/// Return the initial stack pointer for a page-aligned stack allocation.
+///
+/// The guard occupies the first page. The returned top is exclusive and is
+/// suitable for an initially empty downward-growing stack.
+pub const fn bootstrap_stack_top(allocation_base: u64) -> Option<u64> {
+    if allocation_base == 0 || allocation_base % BOOTSTRAP_STACK_PAGE_SIZE != 0 {
+        return None;
+    }
+    allocation_base.checked_add(BOOTSTRAP_STACK_LAYOUT.allocation_size)
+}
 
 pub mod architecture {
     pub const X86_64: u32 = 1;
@@ -221,6 +253,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn bootstrap_stack_layout_reserves_guard_and_aligned_stack() {
+        assert_eq!(BOOTSTRAP_STACK_LAYOUT.guard_size, 4096);
+        assert_eq!(BOOTSTRAP_STACK_LAYOUT.stack_size, 64 * 1024);
+        assert_eq!(BOOTSTRAP_STACK_LAYOUT.allocation_size, 68 * 1024);
+        let base = 0x20_0000;
+        let top = bootstrap_stack_top(base).unwrap();
+        assert_eq!(top - base, BOOTSTRAP_STACK_LAYOUT.allocation_size);
+        assert_eq!(top % BOOTSTRAP_STACK_ALIGNMENT, 0);
+    }
+
+    #[test]
+    fn bootstrap_stack_top_rejects_invalid_base_and_overflow() {
+        assert_eq!(bootstrap_stack_top(0), None);
+        assert_eq!(bootstrap_stack_top(0x1001), None);
+        assert_eq!(
+            bootstrap_stack_top(u64::MAX & !(BOOTSTRAP_STACK_PAGE_SIZE - 1)),
+            None
+        );
+    }
     #[test]
     fn boot_info_has_stable_v2_layout() {
         assert_eq!(core::mem::size_of::<BootInfo>(), 88);
