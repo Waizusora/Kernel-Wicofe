@@ -68,6 +68,37 @@ pub fn page_table_allocation_layout(table_count: usize) -> Option<PageTableAlloc
     })
 }
 
+/// Reserve enough additional tables to identity-map the table pool itself.
+///
+/// The required-capacity planners count every intermediate table touched by a
+/// mapping. This computes a conservative fixed point for a contiguous pool,
+/// including the worst possible offset at each 2 MiB, 1 GiB, and 512 GiB
+/// boundary. The root table is already included in base_table_capacity.
+pub fn page_table_pool_capacity(base_table_capacity: usize) -> Option<usize> {
+    if base_table_capacity == 0 {
+        return None;
+    }
+
+    fn maximum_regions_touched(pages: usize, region_pages: usize) -> Option<usize> {
+        pages
+            .checked_add(region_pages - 2)?
+            .checked_div(region_pages)?
+            .checked_add(1)
+    }
+
+    let mut capacity = base_table_capacity;
+    loop {
+        let extra = maximum_regions_touched(capacity, 1 << 27)?
+            .checked_add(maximum_regions_touched(capacity, 1 << 18)?)?
+            .checked_add(maximum_regions_touched(capacity, 1 << 9)?)?;
+        let required = base_table_capacity.checked_add(extra)?;
+        if required <= capacity {
+            return Some(capacity);
+        }
+        capacity = required;
+    }
+}
+
 /// Hardware-independent permission bits for a 4 KiB kernel mapping.
 pub const MAP_READ: u32 = 1 << 0;
 pub const MAP_WRITE: u32 = 1 << 1;
@@ -778,6 +809,15 @@ mod tests {
             plan_combined_page_mappings(&overflowing, &[], &mut [KernelPageMapping::default(); 1]),
             Err(CombinedMappingError::AddressOverflow)
         );
+    }
+
+    #[test]
+    fn page_table_pool_capacity_reserves_self_mapping_tables() {
+        assert_eq!(page_table_pool_capacity(1), Some(4));
+        assert_eq!(page_table_pool_capacity(4), Some(7));
+        assert_eq!(page_table_pool_capacity(512), Some(516));
+        assert_eq!(page_table_pool_capacity(0), None);
+        assert_eq!(page_table_pool_capacity(usize::MAX), None);
     }
 
     #[test]
