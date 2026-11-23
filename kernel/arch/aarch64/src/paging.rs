@@ -277,7 +277,10 @@ mod tests {
             executable: false,
             attribute_index: 0,
         };
-        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        assert_eq!(
+            build_page_tables(&mut tables, &addresses, &[mapping]),
+            Ok(4)
+        );
         let indexes = translation_table_indices(mapping.virtual_start).unwrap();
         let l1 = table_index(&addresses, tables[0][indexes[0]]);
         let l2 = table_index(&addresses, tables[l1][indexes[1]]);
