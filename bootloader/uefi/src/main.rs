@@ -985,10 +985,7 @@ unsafe fn build_architecture_page_tables(
     services: &BootServices,
     mappings: &[KernelPageMapping],
 ) -> Result<PreparedPageTables, Status> {
-    let mapping_capacity = mappings
-        .len()
-        .checked_add(1)
-        .ok_or(EFI_INVALID_PARAMETER)?;
+    let mapping_capacity = mappings.len().checked_add(1).ok_or(EFI_INVALID_PARAMETER)?;
     let architecture_mappings = unsafe {
         allocate_array::<wicofe_kernel_aarch64::paging::PageMapping>(services, mapping_capacity)?
     };
