@@ -16,8 +16,9 @@ use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::{
-    IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAX_PE_IDENTITY_MAPPINGS,
-    UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors, kernel_allocation_layout,
+    IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ,
+    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor,
+    decode_uefi_memory_descriptors, kernel_allocation_layout,
     page_table_allocation_layout, plan_combined_page_mappings, plan_kernel_page_mappings,
     plan_pe_identity_mappings, translate_uefi_memory_map,
 };
@@ -967,6 +968,7 @@ unsafe fn prepare_page_tables(
     kernel: LoadedKernel,
     loader_image_base: *mut u8,
     loader_image_size: usize,
+    prepared_boot_info: &PreparedBootInfo,
 ) -> Result<PreparedPageTables, Status> {
     let segment_capacity = usize::from(parsed.program_header_count());
     let segments = unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
@@ -1016,12 +1018,15 @@ unsafe fn prepare_page_tables(
                 let pe_mapping_slice =
                     unsafe { core::slice::from_raw_parts(pe_mappings, pe_mapping_count) };
 
+                let identity_capacity = pe_mapping_count
+                    .checked_add(1)
+                    .ok_or(EFI_INVALID_PARAMETER)?;
                 let identity_ranges =
-                    unsafe { allocate_array::<IdentityMappingRange>(services, pe_mapping_count)? };
+                    unsafe { allocate_array::<IdentityMappingRange>(services, identity_capacity)? };
                 let identity_result = (|| {
-                    // SAFETY: identity_ranges has pe_mapping_count writable entries.
+                    // SAFETY: identity_ranges has identity_capacity writable entries.
                     let ranges = unsafe {
-                        core::slice::from_raw_parts_mut(identity_ranges, pe_mapping_count)
+                        core::slice::from_raw_parts_mut(identity_ranges, identity_capacity)
                     };
                     for (index, mapping) in pe_mapping_slice.iter().enumerate() {
                         let length = mapping
@@ -1035,8 +1040,36 @@ unsafe fn prepare_page_tables(
                         };
                     }
 
+                    // Pool allocations may share a physical page. Keep the complete
+                    // BootInfo/map backing span in one read-only identity range so
+                    // page rounding cannot create duplicate leaf mappings. The raw
+                    // map and descriptor scratch inside this span are no longer
+                    // needed after ExitBootServices succeeds.
+                    let info_start = prepared_boot_info.info as u64;
+                    let info_end = info_start
+                        .checked_add(core::mem::size_of::<BootInfo>() as u64)
+                        .ok_or(EFI_INVALID_PARAMETER)?;
+                    let regions_start = prepared_boot_info.regions as u64;
+                    let regions_size = prepared_boot_info
+                        .descriptor_capacity
+                        .checked_mul(core::mem::size_of::<MemoryRegion>())
+                        .and_then(|size| u64::try_from(size).ok())
+                        .ok_or(EFI_INVALID_PARAMETER)?;
+                    let regions_end = regions_start
+                        .checked_add(regions_size)
+                        .ok_or(EFI_INVALID_PARAMETER)?;
+                    let metadata_start = info_start.min(regions_start);
+                    let metadata_end = info_end.max(regions_end);
+                    ranges[pe_mapping_count] = IdentityMappingRange {
+                        physical_start: metadata_start,
+                        length: metadata_end
+                            .checked_sub(metadata_start)
+                            .ok_or(EFI_INVALID_PARAMETER)?,
+                        permissions: MAP_READ,
+                    };
+
                     let combined_capacity = kernel_mapping_count
-                        .checked_add(pe_mapping_count)
+                        .checked_add(identity_capacity)
                         .ok_or(EFI_INVALID_PARAMETER)?;
                     let combined = unsafe {
                         allocate_array::<KernelPageMapping>(services, combined_capacity)?
@@ -1045,9 +1078,12 @@ unsafe fn prepare_page_tables(
                         // SAFETY: combined has combined_capacity writable entries.
                         let combined_output =
                             unsafe { core::slice::from_raw_parts_mut(combined, combined_capacity) };
-                        let combined_count =
-                            plan_combined_page_mappings(kernel_mappings, ranges, combined_output)
-                                .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        let combined_count = plan_combined_page_mappings(
+                            kernel_mappings,
+                            ranges,
+                            combined_output,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
                         // SAFETY: only the initialized combined mappings are exposed.
                         let combined_slice =
                             unsafe { core::slice::from_raw_parts(combined, combined_count) };
@@ -1203,16 +1239,9 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
                 match unsafe { load_segments(&*boot_services, file_image, &parsed) } {
                     Ok(kernel) => {
                         // SAFETY: firmware services remain active and the loaded image is valid.
-                        match unsafe {
-                            prepare_page_tables(
-                                &*boot_services,
-                                &parsed,
-                                kernel,
-                                loader_image_base,
-                                loader_image_size,
-                            )
-                        } {
-                            Ok(tables) => Ok((kernel, tables)),
+                        let prepared = match unsafe { prepare_boot_info(&*boot_services, kernel) }
+                        {
+                            Ok(value) => value,
                             Err(status) => {
                                 let pages = kernel
                                     .image_size
@@ -1221,6 +1250,29 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
                                     .unwrap_or(0);
                                 // SAFETY: load_segments retained this exact aligned image range.
                                 unsafe { free_pages(&*boot_services, kernel.physical_base, pages) };
+                                return Err(status);
+                            }
+                        };
+                        match unsafe {
+                            prepare_page_tables(
+                                &*boot_services,
+                                &parsed,
+                                kernel,
+                                loader_image_base,
+                                loader_image_size,
+                                &prepared,
+                            )
+                        } {
+                            Ok(tables) => Ok((kernel, tables, prepared)),
+                            Err(status) => {
+                                let pages = kernel
+                                    .image_size
+                                    .checked_add(UEFI_PAGE_SIZE - 1)
+                                    .and_then(|size| usize::try_from(size / UEFI_PAGE_SIZE).ok())
+                                    .unwrap_or(0);
+                                // SAFETY: load_segments retained this exact aligned image range.
+                                unsafe { free_pages(&*boot_services, kernel.physical_base, pages) };
+                                unsafe { free_prepared_boot_info(&*boot_services, prepared) };
                                 Err(status)
                             }
                         }
@@ -1235,16 +1287,7 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
     unsafe { free_pool(&*boot_services, image.cast()) };
 
     match loaded_kernel {
-        Ok((kernel, tables)) => {
-            // SAFETY: boot services remain active. The prepared allocations are
-            // retained and no firmware allocations occur after the final map call.
-            let mut prepared = match unsafe { prepare_boot_info(&*boot_services, kernel) } {
-                Ok(value) => value,
-                Err(status) => {
-                    let _ = print_message(system_table, ERROR_MESSAGE);
-                    return status;
-                }
-            };
+        Ok((kernel, tables, mut prepared)) => {
             let _kernel_handoff_metadata = (
                 prepared.info as u64,
                 prepared.regions as u64,
