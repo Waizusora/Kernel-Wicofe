@@ -226,6 +226,15 @@ struct PreparedBootInfo {
     map_key: usize,
 }
 
+/// Release retained BootInfo allocations when page-table preparation fails.
+unsafe fn free_prepared_boot_info(services: &BootServices, prepared: PreparedBootInfo) {
+    // SAFETY: each pointer is a distinct allocation retained by prepare_boot_info.
+    unsafe { free_pool(services, prepared.info.cast()) };
+    unsafe { free_pool(services, prepared.regions.cast()) };
+    unsafe { free_pool(services, prepared.descriptors.cast()) };
+    unsafe { free_pool(services, prepared.raw_map) };
+}
+
 /// Allocate all storage first, then take and translate the final map without
 /// making any further firmware allocation calls.
 unsafe fn prepare_boot_info(
@@ -1237,23 +1246,8 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
             Ok(parsed) => {
                 // SAFETY: parsed references file_image, and boot services are still active.
                 match unsafe { load_segments(&*boot_services, file_image, &parsed) } {
-                    Ok(kernel) => {
-                        // SAFETY: firmware services remain active and the loaded image is valid.
-                        let prepared = match unsafe { prepare_boot_info(&*boot_services, kernel) }
-                        {
-                            Ok(value) => value,
-                            Err(status) => {
-                                let pages = kernel
-                                    .image_size
-                                    .checked_add(UEFI_PAGE_SIZE - 1)
-                                    .and_then(|size| usize::try_from(size / UEFI_PAGE_SIZE).ok())
-                                    .unwrap_or(0);
-                                // SAFETY: load_segments retained this exact aligned image range.
-                                unsafe { free_pages(&*boot_services, kernel.physical_base, pages) };
-                                return Err(status);
-                            }
-                        };
-                        match unsafe {
+                    Ok(kernel) => match unsafe { prepare_boot_info(&*boot_services, kernel) } {
+                        Ok(prepared) => match unsafe {
                             prepare_page_tables(
                                 &*boot_services,
                                 &parsed,
@@ -1275,8 +1269,18 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
                                 unsafe { free_prepared_boot_info(&*boot_services, prepared) };
                                 Err(status)
                             }
+                        },
+                        Err(status) => {
+                            let pages = kernel
+                                .image_size
+                                .checked_add(UEFI_PAGE_SIZE - 1)
+                                .and_then(|size| usize::try_from(size / UEFI_PAGE_SIZE).ok())
+                                .unwrap_or(0);
+                            // SAFETY: load_segments retained this exact aligned image range.
+                            unsafe { free_pages(&*boot_services, kernel.physical_base, pages) };
+                            Err(status)
                         }
-                    }
+                    },
                     Err(status) => Err(status),
                 }
             }
