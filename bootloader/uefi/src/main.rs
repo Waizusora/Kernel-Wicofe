@@ -16,7 +16,7 @@ use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 #[cfg(target_arch = "x86_64")]
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::{
-    IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ,
+    IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ, MAP_WRITE,
     MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
     kernel_allocation_layout, page_table_allocation_layout, plan_combined_page_mappings,
     plan_kernel_page_mappings, plan_pe_identity_mappings, translate_uefi_memory_map,
@@ -32,6 +32,7 @@ const EFI_MEMORY_DESCRIPTOR_VERSION: u32 = 1;
 const MAX_MEMORY_MAP_ATTEMPTS: usize = 4;
 const MEMORY_MAP_DESCRIPTOR_SLACK: usize = 32;
 const EFI_LOADER_DATA: u32 = 2;
+const EFI_BOOT_SERVICES_DATA: u32 = 4;
 const EFI_FILE_MODE_READ: u64 = 1;
 const MAX_KERNEL_SIZE: usize = 64 * 1024 * 1024;
 const KERNEL_PATH: &[u16] = &[
@@ -222,6 +223,7 @@ struct PreparedBootInfo {
     raw_map_capacity: usize,
     descriptors: *mut UefiMemoryDescriptor,
     descriptor_capacity: usize,
+    descriptor_count: usize,
     map_key: usize,
 }
 
@@ -438,6 +440,7 @@ unsafe fn prepare_boot_info(
             raw_map_capacity: capacity,
             descriptors,
             descriptor_capacity,
+            descriptor_count,
             map_key,
         });
     }
@@ -520,8 +523,78 @@ unsafe fn refresh_prepared_boot_info(
     validate_boot_info(boot_info, map).map_err(|_| EFI_INVALID_PARAMETER)?;
 
     prepared.region_count = region_count;
+    prepared.descriptor_count = decoded_count;
     prepared.map_key = map_key;
     Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+fn current_stack_pointer() -> u64 {
+    let stack_pointer: u64;
+    // SAFETY: reading RSP does not modify machine state.
+    unsafe {
+        core::arch::asm!(
+            "mov {}, rsp",
+            out(reg) stack_pointer,
+            options(nomem, nostack, preserves_flags)
+        )
+    };
+    stack_pointer
+}
+
+#[cfg(target_arch = "aarch64")]
+fn current_stack_pointer() -> u64 {
+    let stack_pointer: u64;
+    // SAFETY: reading SP does not modify machine state.
+    unsafe {
+        core::arch::asm!(
+            "mov {}, sp",
+            out(reg) stack_pointer,
+            options(nomem, nostack, preserves_flags)
+        )
+    };
+    stack_pointer
+}
+
+fn active_stack_mapping(
+    prepared: &PreparedBootInfo,
+) -> Result<IdentityMappingRange, Status> {
+    // SAFETY: descriptor_count entries were initialized by GetMemoryMap decoding.
+    let descriptors = unsafe {
+        core::slice::from_raw_parts(prepared.descriptors, prepared.descriptor_count)
+    };
+    let stack_pointer = current_stack_pointer();
+    let descriptor = descriptors
+        .iter()
+        .find(|descriptor| {
+            let Some(length) = descriptor.number_of_pages.checked_mul(UEFI_PAGE_SIZE) else {
+                return false;
+            };
+            let Some(end) = descriptor.physical_start.checked_add(length) else {
+                return false;
+            };
+            descriptor.number_of_pages != 0
+                && stack_pointer >= descriptor.physical_start
+                && stack_pointer < end
+        })
+        .ok_or(EFI_INVALID_PARAMETER)?;
+
+    // UEFI's active image stack must reside in loader or boot-services data.
+    // Other memory types are rejected rather than mapped with guessed semantics.
+    if descriptor.memory_type != EFI_LOADER_DATA
+        && descriptor.memory_type != EFI_BOOT_SERVICES_DATA
+    {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+    let length = descriptor
+        .number_of_pages
+        .checked_mul(UEFI_PAGE_SIZE)
+        .ok_or(EFI_INVALID_PARAMETER)?;
+    Ok(IdentityMappingRange {
+        physical_start: descriptor.physical_start,
+        length,
+        permissions: MAP_READ | MAP_WRITE,
+    })
 }
 
 unsafe fn loaded_image_layout(
@@ -1027,7 +1100,7 @@ unsafe fn prepare_page_tables(
                     unsafe { core::slice::from_raw_parts(pe_mappings, pe_mapping_count) };
 
                 let identity_capacity = pe_mapping_count
-                    .checked_add(1)
+                    .checked_add(2)
                     .ok_or(EFI_INVALID_PARAMETER)?;
                 let identity_ranges =
                     unsafe { allocate_array::<IdentityMappingRange>(services, identity_capacity)? };
@@ -1075,6 +1148,7 @@ unsafe fn prepare_page_tables(
                             .ok_or(EFI_INVALID_PARAMETER)?,
                         permissions: MAP_READ,
                     };
+                    ranges[pe_mapping_count + 1] = active_stack_mapping(prepared_boot_info)?;
 
                     let combined_capacity = kernel_mapping_count
                         .checked_add(identity_capacity)
