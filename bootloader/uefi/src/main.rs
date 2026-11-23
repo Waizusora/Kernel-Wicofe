@@ -556,13 +556,10 @@ fn current_stack_pointer() -> u64 {
     stack_pointer
 }
 
-fn active_stack_mapping(
-    prepared: &PreparedBootInfo,
-) -> Result<IdentityMappingRange, Status> {
+fn active_stack_mapping(prepared: &PreparedBootInfo) -> Result<IdentityMappingRange, Status> {
     // SAFETY: descriptor_count entries were initialized by GetMemoryMap decoding.
-    let descriptors = unsafe {
-        core::slice::from_raw_parts(prepared.descriptors, prepared.descriptor_count)
-    };
+    let descriptors =
+        unsafe { core::slice::from_raw_parts(prepared.descriptors, prepared.descriptor_count) };
     let stack_pointer = current_stack_pointer();
     let descriptor = descriptors
         .iter()
@@ -581,8 +578,7 @@ fn active_stack_mapping(
 
     // UEFI's active image stack must reside in loader or boot-services data.
     // Other memory types are rejected rather than mapped with guessed semantics.
-    if descriptor.memory_type != EFI_LOADER_DATA
-        && descriptor.memory_type != EFI_BOOT_SERVICES_DATA
+    if descriptor.memory_type != EFI_LOADER_DATA && descriptor.memory_type != EFI_BOOT_SERVICES_DATA
     {
         return Err(EFI_INVALID_PARAMETER);
     }
