@@ -236,3 +236,10 @@ after current allocations, but this is not yet the final GetMemoryMap /
 ExitBootServices transaction. Consequently, the kernel handoff is not
 operational. A successful CI build proves PE/COFF compilation only; it does
 not prove execution on firmware or QEMU.
+
+The x86-64 and AArch64 architecture crates now expose pure validators for
+captured CPU handoff state. They check the ABI-required control/translation
+bits, exception masks, and privilege or exception level. WBL does not yet
+capture these register snapshots or invoke the validators; they are
+preflight primitives, not evidence that firmware currently satisfies the
+entry contract.
