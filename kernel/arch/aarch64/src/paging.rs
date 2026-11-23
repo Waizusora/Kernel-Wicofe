@@ -257,7 +257,7 @@ mod tests {
         );
         assert_eq!(
             translation_table_indices(0xffff_0000_4000_0000),
-            Ok([0x1fe, 1, 0, 0])
+            Ok([0, 1, 0, 0])
         );
         assert_eq!(
             translation_table_indices(0x0001_0000_0000_0000),
@@ -367,7 +367,7 @@ mod tests {
             Err(PagingError::InvalidTablePool)
         );
         assert_eq!(
-            translation_table_indices(0x0000_8000_0000_0000),
+            translation_table_indices(0x0001_0000_0000_0000),
             Err(PagingError::NonCanonicalVirtualAddress)
         );
     }
