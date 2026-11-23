@@ -107,6 +107,7 @@ type GetMemoryMapFn =
     unsafe extern "efiapi" fn(*mut usize, *mut c_void, *mut usize, *mut usize, *mut u32) -> Status;
 type AllocatePoolFn = unsafe extern "efiapi" fn(u32, usize, *mut *mut c_void) -> Status;
 type FreePoolFn = unsafe extern "efiapi" fn(*mut c_void) -> Status;
+type ExitBootServicesFn = unsafe extern "efiapi" fn(Handle, usize) -> Status;
 #[repr(C)]
 struct BootServices {
     header: TableHeader,
@@ -118,7 +119,15 @@ struct BootServices {
     free_pool: Option<FreePoolFn>,
     between_pool_and_handle: [usize; 9],
     handle_protocol: Option<HandleProtocolFn>,
+    // Reserved through UnloadImage; ExitBootServices is the next UEFI table slot.
+    between_handle_and_exit_boot_services: [usize; 9],
+    exit_boot_services: Option<ExitBootServicesFn>,
 }
+
+// UEFI Boot Services table layout: ExitBootServices is pointer slot 26
+// (24-byte header plus 26 eight-byte function-pointer slots).
+const _: () = assert!(core::mem::size_of::<usize>() == 8);
+const _: () = assert!(core::mem::offset_of!(BootServices, exit_boot_services) == 24 + 26 * 8);
 
 #[repr(C)]
 struct LoadedImageProtocol {
