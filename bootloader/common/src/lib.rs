@@ -268,10 +268,7 @@ mod tests {
     fn bootstrap_stack_top_rejects_invalid_base_and_overflow() {
         assert_eq!(bootstrap_stack_top(0), None);
         assert_eq!(bootstrap_stack_top(0x1001), None);
-        assert_eq!(
-            bootstrap_stack_top(!(BOOTSTRAP_STACK_PAGE_SIZE - 1)),
-            None
-        );
+        assert_eq!(bootstrap_stack_top(!(BOOTSTRAP_STACK_PAGE_SIZE - 1)), None);
     }
     #[test]
     fn boot_info_has_stable_v2_layout() {
