@@ -217,14 +217,22 @@ remainder of each segment supplies BSS. Unused prefix and suffix pages are
 released when possible. The temporary file buffer and file handles are
 released after the copy.
 
-WBL now allocates a separate UEFI page-table pool and invokes the
-architecture-specific four-level builder for the kernel PT_LOAD mappings.
-The pool is retained on success, and its root physical address and used
-table count are recorded internally. The tables remain inactive: WBL does
-not load CR3, program AArch64 MAIR/TCR/TTBR state, or establish identity
-mappings for its own code, stack, firmware tables, and handoff buffers.
-Consequently, this does not yet make the kernel image accessible at its
-linked virtual base. WBL also does not create the bootstrap stack, capture
-the final memory map, call ExitBootServices, or transfer control to the
-kernel. A successful CI build proves PE/COFF compilation
-only; it does not prove execution on firmware or QEMU.
+WBL allocates a separate UEFI page-table pool and invokes the
+architecture-specific builder for the kernel PT_LOAD mappings. The pool is
+retained on success, identity-mapped read/write and non-executable, and its
+root physical address and used table count are recorded internally. WBL also
+plans identity mappings for its loaded PE image with section-derived
+permissions, the active firmware stack, BootInfo and canonical memory-map
+storage, and a dedicated 64 KiB bootstrap stack. The bootstrap stack
+allocation includes a 4 KiB guard page at its low-address end; only the
+usable stack pages are mapped read/write and non-executable. The guard page
+is deliberately omitted from the mapping plan.
+
+The UEFI Boot Services table declaration includes the correctly positioned
+ExitBootServices entry, but WBL does not call it yet. The page tables remain
+inactive: WBL does not load CR3, program AArch64 MAIR/TCR/TTBR state, switch
+to the bootstrap stack, or branch to the kernel. The memory map is refreshed
+after current allocations, but this is not yet the final GetMemoryMap /
+ExitBootServices transaction. Consequently, the kernel handoff is not
+operational. A successful CI build proves PE/COFF compilation only; it does
+not prove execution on firmware or QEMU.
