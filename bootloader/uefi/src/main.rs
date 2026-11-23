@@ -19,8 +19,8 @@ use wicofe_bootloader_uefi::{
     IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ, MAP_WRITE,
     MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
     kernel_allocation_layout, page_table_allocation_layout, page_table_pool_capacity,
-    plan_combined_page_mappings,
-    plan_kernel_page_mappings, plan_pe_identity_mappings, translate_uefi_memory_map,
+    plan_combined_page_mappings, plan_kernel_page_mappings, plan_pe_identity_mappings,
+    translate_uefi_memory_map,
 };
 
 type Status = usize;
@@ -893,10 +893,7 @@ unsafe fn build_architecture_page_tables(
     services: &BootServices,
     mappings: &[KernelPageMapping],
 ) -> Result<PreparedPageTables, Status> {
-    let mapping_capacity = mappings
-        .len()
-        .checked_add(1)
-        .ok_or(EFI_INVALID_PARAMETER)?;
+    let mapping_capacity = mappings.len().checked_add(1).ok_or(EFI_INVALID_PARAMETER)?;
     let architecture_mappings = unsafe {
         allocate_array::<wicofe_kernel_x86_64::paging::PageMapping>(services, mapping_capacity)?
     };
@@ -1004,8 +1001,9 @@ unsafe fn build_architecture_page_tables(
         convert_kernel_page_mappings(mappings, 0, &mut output[..mappings.len()])
             .map_err(|_| EFI_INVALID_PARAMETER)?;
         let base_mappings = &output[..mappings.len()];
-        let base_table_count = wicofe_kernel_aarch64::paging::required_table_capacity(base_mappings)
-            .map_err(|_| EFI_INVALID_PARAMETER)?;
+        let base_table_count =
+            wicofe_kernel_aarch64::paging::required_table_capacity(base_mappings)
+                .map_err(|_| EFI_INVALID_PARAMETER)?;
         let table_count =
             page_table_pool_capacity(base_table_count).ok_or(EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
