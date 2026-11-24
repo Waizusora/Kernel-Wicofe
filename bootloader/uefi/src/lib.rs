@@ -1071,5 +1071,5 @@ mod memory_map;
 pub use memory_map::{
     DescriptorDecodeError, MemoryMapError, MemoryReservation, ReservationError,
     UefiMemoryDescriptor, apply_memory_reservations, decode_uefi_memory_descriptors,
-    translate_uefi_memory_map,
+    apply_memory_reservations_in_place, translate_uefi_memory_map,
 };

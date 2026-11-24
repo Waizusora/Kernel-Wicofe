@@ -303,6 +303,132 @@ pub fn apply_memory_reservations(
     Ok(count)
 }
 
+/// Apply reservations directly to a canonical map buffer without allocating scratch memory.
+///
+/// The map is validated before mutation. Each reservation must fit in one original
+/// BOOTLOADER_RECLAIM region; adjacent descriptors are not silently combined.
+pub fn apply_memory_reservations_in_place(
+    regions: &mut [MemoryRegion],
+    region_count: usize,
+    reservations: &[MemoryReservation],
+) -> Result<usize, ReservationError> {
+    if region_count > regions.len() {
+        return Err(ReservationError::OutputTooSmall);
+    }
+
+    let mut previous_region_end = 0_u64;
+    for region in regions.iter().take(region_count) {
+        if region.length == 0 {
+            return Err(ReservationError::InvalidRange);
+        }
+        let end = region
+            .physical_start
+            .checked_add(region.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        if region.physical_start < previous_region_end {
+            return Err(ReservationError::UnsortedOrOverlappingReservations);
+        }
+        previous_region_end = end;
+    }
+
+    let mut previous_reservation_end = 0_u64;
+    for reservation in reservations {
+        if reservation.length == 0
+            || reservation.physical_start % EFI_PAGE_SIZE != 0
+            || reservation.length % EFI_PAGE_SIZE != 0
+        {
+            return Err(ReservationError::InvalidRange);
+        }
+        if reservation.kind != memory_kind::KERNEL && reservation.kind != memory_kind::BOOT_INFO {
+            return Err(ReservationError::UnsupportedKind);
+        }
+        let end = reservation
+            .physical_start
+            .checked_add(reservation.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        if reservation.physical_start < previous_reservation_end {
+            return Err(ReservationError::UnsortedOrOverlappingReservations);
+        }
+        previous_reservation_end = end;
+
+        let containing = regions.iter().take(region_count).find(|region| {
+            let Some(region_end) = region.physical_start.checked_add(region.length) else {
+                return false;
+            };
+            reservation.physical_start >= region.physical_start && end <= region_end
+        });
+        if !containing.is_some_and(|region| region.kind == memory_kind::BOOTLOADER_RECLAIM) {
+            return Err(ReservationError::NotContainedInLoaderMemory);
+        }
+    }
+
+    let mut count = region_count;
+    for reservation in reservations {
+        let reservation_end = reservation
+            .physical_start
+            .checked_add(reservation.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        let index = regions
+            .iter()
+            .take(count)
+            .position(|region| {
+                let Some(region_end) = region.physical_start.checked_add(region.length) else {
+                    return false;
+                };
+                reservation.physical_start >= region.physical_start
+                    && reservation_end <= region_end
+                    && region.kind == memory_kind::BOOTLOADER_RECLAIM
+            })
+            .ok_or(ReservationError::NotContainedInLoaderMemory)?;
+
+        let original = regions[index];
+        let original_end = original
+            .physical_start
+            .checked_add(original.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        let prefix_length = reservation.physical_start - original.physical_start;
+        let suffix_length = original_end - reservation_end;
+        let part_count = 1 + usize::from(prefix_length != 0) + usize::from(suffix_length != 0);
+        let growth = part_count - 1;
+        let new_count = count
+            .checked_add(growth)
+            .ok_or(ReservationError::OutputTooSmall)?;
+        if new_count > regions.len() {
+            return Err(ReservationError::OutputTooSmall);
+        }
+
+        regions.copy_within(index + 1..count, index + part_count);
+        let mut destination = index;
+        if prefix_length != 0 {
+            regions[destination] = MemoryRegion {
+                physical_start: original.physical_start,
+                length: prefix_length,
+                kind: original.kind,
+                attributes: original.attributes,
+            };
+            destination += 1;
+        }
+        regions[destination] = MemoryRegion {
+            physical_start: reservation.physical_start,
+            length: reservation.length,
+            kind: reservation.kind,
+            attributes: original.attributes,
+        };
+        destination += 1;
+        if suffix_length != 0 {
+            regions[destination] = MemoryRegion {
+                physical_start: reservation_end,
+                length: suffix_length,
+                kind: original.kind,
+                attributes: original.attributes,
+            };
+        }
+        count = new_count;
+    }
+
+    Ok(count)
+}
+
 /// Errors returned while decoding a firmware-provided EFI memory-map buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DescriptorDecodeError {
@@ -705,6 +831,68 @@ mod reservation_tests {
             length: pages * EFI_PAGE_SIZE,
             kind,
         }
+    }
+
+    #[test]
+    fn in_place_reservations_split_regions_and_preserve_attributes() {
+        let mut regions = [
+            region(0x1000, 9, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_WRITE_BACK),
+            region(0xa000, 4, memory_kind::USABLE, 0),
+            region(0xe000, 4, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_UNCACHED),
+            MemoryRegion::default(),
+            MemoryRegion::default(),
+            MemoryRegion::default(),
+            MemoryRegion::default(),
+        ];
+        let reservations = [
+            reservation(0x3000, 2, memory_kind::KERNEL),
+            reservation(0xf000, 1, memory_kind::BOOT_INFO),
+        ];
+
+        assert_eq!(
+            apply_memory_reservations_in_place(&mut regions, 3, &reservations),
+            Ok(7)
+        );
+        assert_eq!(regions[0], region(0x1000, 2, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_WRITE_BACK));
+        assert_eq!(regions[1], region(0x3000, 2, memory_kind::KERNEL, memory_attribute::CACHE_WRITE_BACK));
+        assert_eq!(regions[2], region(0x5000, 5, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_WRITE_BACK));
+        assert_eq!(regions[3], region(0xa000, 4, memory_kind::USABLE, 0));
+        assert_eq!(regions[4], region(0xe000, 1, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_UNCACHED));
+        assert_eq!(regions[5], region(0xf000, 1, memory_kind::BOOT_INFO, memory_attribute::CACHE_UNCACHED));
+        assert_eq!(regions[6], region(0x10000, 2, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_UNCACHED));
+    }
+
+    #[test]
+    fn in_place_reservations_validate_before_mutating_and_check_capacity() {
+        let original = [
+            region(0x1000, 8, memory_kind::BOOTLOADER_RECLAIM, 0),
+            MemoryRegion::default(),
+            MemoryRegion::default(),
+        ];
+        let mut regions = original;
+        let invalid = [
+            reservation(0x2000, 1, memory_kind::KERNEL),
+            reservation(0x9000, 1, memory_kind::BOOT_INFO),
+        ];
+        assert_eq!(
+            apply_memory_reservations_in_place(&mut regions, 1, &invalid),
+            Err(ReservationError::NotContainedInLoaderMemory)
+        );
+        assert_eq!(regions, original);
+
+        let mut small = [region(0x1000, 8, memory_kind::BOOTLOADER_RECLAIM, 0)];
+        assert_eq!(
+            apply_memory_reservations_in_place(
+                &mut small,
+                1,
+                &[reservation(0x3000, 1, memory_kind::KERNEL)],
+            ),
+            Err(ReservationError::OutputTooSmall)
+        );
+        assert_eq!(
+            apply_memory_reservations_in_place(&mut regions, 4, &[]),
+            Err(ReservationError::OutputTooSmall)
+        );
     }
 
     #[test]
