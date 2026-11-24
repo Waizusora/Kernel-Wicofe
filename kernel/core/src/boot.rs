@@ -4,9 +4,7 @@
 //! slice. Mapping arbitrary physical addresses is the responsibility of the
 //! architecture entry code and must happen before this API is called.
 
-use crate::memory::{
-    BitmapAllocatorError, BitmapFrameAllocator, FrameAllocator, PhysicalRange,
-};
+use crate::memory::{BitmapAllocatorError, BitmapFrameAllocator, FrameAllocator, PhysicalRange};
 use wicofe_bootloader_common::{
     BootInfo, BootInfoError, MemoryRegion, architecture, validate_boot_info,
 };
@@ -212,9 +210,7 @@ mod tests {
         let map = valid_map();
         let handoff = ValidatedBootHandoff::new(architecture::X86_64, &info, &map).unwrap();
         let mut bitmap = [0u64; 16];
-        let mut allocator = handoff
-            .bitmap_frame_allocator(&[], &mut bitmap)
-            .unwrap();
+        let mut allocator = handoff.bitmap_frame_allocator(&[], &mut bitmap).unwrap();
 
         assert_eq!(allocator.frame_count(), 1024);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0020_0000);
