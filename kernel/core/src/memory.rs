@@ -435,8 +435,7 @@ mod tests {
         let map = [region(0x4000, 0x4000, memory_kind::USABLE)];
         let reservations = [PhysicalRange::new(0x5001, 1).unwrap()];
         let mut bitmap = [0u64; 1];
-        let mut allocator =
-            BitmapFrameAllocator::new(&map, &reservations, &mut bitmap).unwrap();
+        let mut allocator = BitmapFrameAllocator::new(&map, &reservations, &mut bitmap).unwrap();
 
         assert_eq!(allocator.free_count(), 2);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x4000);
