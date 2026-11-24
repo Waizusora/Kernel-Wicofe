@@ -836,9 +836,19 @@ mod reservation_tests {
     #[test]
     fn in_place_reservations_split_regions_and_preserve_attributes() {
         let mut regions = [
-            region(0x1000, 9, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_WRITE_BACK),
+            region(
+                0x1000,
+                9,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_WRITE_BACK,
+            ),
             region(0xa000, 4, memory_kind::USABLE, 0),
-            region(0xe000, 4, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_UNCACHED),
+            region(
+                0xe000,
+                4,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_UNCACHED,
+            ),
             MemoryRegion::default(),
             MemoryRegion::default(),
             MemoryRegion::default(),
@@ -853,13 +863,61 @@ mod reservation_tests {
             apply_memory_reservations_in_place(&mut regions, 3, &reservations),
             Ok(7)
         );
-        assert_eq!(regions[0], region(0x1000, 2, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_WRITE_BACK));
-        assert_eq!(regions[1], region(0x3000, 2, memory_kind::KERNEL, memory_attribute::CACHE_WRITE_BACK));
-        assert_eq!(regions[2], region(0x5000, 5, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_WRITE_BACK));
+        assert_eq!(
+            regions[0],
+            region(
+                0x1000,
+                2,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_WRITE_BACK
+            )
+        );
+        assert_eq!(
+            regions[1],
+            region(
+                0x3000,
+                2,
+                memory_kind::KERNEL,
+                memory_attribute::CACHE_WRITE_BACK
+            )
+        );
+        assert_eq!(
+            regions[2],
+            region(
+                0x5000,
+                5,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_WRITE_BACK
+            )
+        );
         assert_eq!(regions[3], region(0xa000, 4, memory_kind::USABLE, 0));
-        assert_eq!(regions[4], region(0xe000, 1, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_UNCACHED));
-        assert_eq!(regions[5], region(0xf000, 1, memory_kind::BOOT_INFO, memory_attribute::CACHE_UNCACHED));
-        assert_eq!(regions[6], region(0x10000, 2, memory_kind::BOOTLOADER_RECLAIM, memory_attribute::CACHE_UNCACHED));
+        assert_eq!(
+            regions[4],
+            region(
+                0xe000,
+                1,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_UNCACHED
+            )
+        );
+        assert_eq!(
+            regions[5],
+            region(
+                0xf000,
+                1,
+                memory_kind::BOOT_INFO,
+                memory_attribute::CACHE_UNCACHED
+            )
+        );
+        assert_eq!(
+            regions[6],
+            region(
+                0x10000,
+                2,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_UNCACHED
+            )
+        );
     }
 
     #[test]
