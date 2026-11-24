@@ -245,12 +245,12 @@ mod tests {
 
     #[test]
     fn reservation_may_be_unaligned_and_skip_whole_frame() {
-        let map = [region(0x4000, 0x3000, memory_kind::USABLE)];
+        let map = [region(0x4000, 0x4000, memory_kind::USABLE)];
         let reservations = [PhysicalRange::new(0x4fff, 2).unwrap()];
         let mut allocator = FrameAllocator::with_reservations(&map, &reservations).unwrap();
 
-        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x5000);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x6000);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x7000);
         assert_eq!(allocator.allocate_frame(), None);
     }
 }
