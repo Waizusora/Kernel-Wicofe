@@ -148,6 +148,219 @@ impl<'a> FrameAllocator<'a> {
     }
 }
 
+/// Errors returned while initializing or using the bitmap allocator.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BitmapAllocatorError {
+    /// The caller-provided bitmap does not contain enough words.
+    BitmapTooSmall { required_words: usize, provided_words: usize },
+    /// A memory-region boundary or aggregate frame count overflowed.
+    AddressOverflow,
+    /// A reservation is empty or its end address overflows.
+    InvalidReservation,
+    /// The frame is not wholly contained in a usable region.
+    FrameNotUsable,
+    /// The frame is already free and therefore cannot be freed again.
+    DoubleFree,
+}
+
+/// A compact bitmap allocator spanning all usable regions in the memory map.
+///
+/// Bitmap bit 1 means allocated/unavailable; bit 0 means free. Bits are indexed
+/// densely across usable frames only, so holes and reserved map entries consume
+/// no bitmap space. The caller owns the backing bitmap storage.
+pub struct BitmapFrameAllocator<'a> {
+    regions: &'a [MemoryRegion],
+    reservations: &'a [PhysicalRange],
+    bitmap: &'a mut [u64],
+    frame_count: usize,
+}
+
+impl<'a> BitmapFrameAllocator<'a> {
+    /// Calculate the number of bitmap words required for the supplied map.
+    pub fn required_words(regions: &[MemoryRegion]) -> Result<usize, BitmapAllocatorError> {
+        let frames = usable_frame_count(regions)?;
+        frames
+            .checked_add(63)
+            .map(|rounded| rounded / 64)
+            .ok_or(BitmapAllocatorError::AddressOverflow)
+    }
+
+    /// Initialize a bitmap over usable frames, excluding explicit reservations.
+    ///
+    /// The bitmap is initialized in-place. Extra words are set to all ones so
+    /// out-of-range bits can never be allocated.
+    pub fn new(
+        regions: &'a [MemoryRegion],
+        reservations: &'a [PhysicalRange],
+        bitmap: &'a mut [u64],
+    ) -> Result<Self, BitmapAllocatorError> {
+        for range in reservations {
+            if range.length == 0 || range.start.checked_add(range.length).is_none() {
+                return Err(BitmapAllocatorError::InvalidReservation);
+            }
+        }
+
+        let frame_count = usable_frame_count(regions)?;
+        let required_words = frame_count
+            .checked_add(63)
+            .ok_or(BitmapAllocatorError::AddressOverflow)?
+            / 64;
+        if bitmap.len() < required_words {
+            return Err(BitmapAllocatorError::BitmapTooSmall {
+                required_words,
+                provided_words: bitmap.len(),
+            });
+        }
+
+        bitmap.fill(u64::MAX);
+        let mut index = 0usize;
+        for region in regions {
+            if region.kind != memory_kind::USABLE {
+                continue;
+            }
+            let (mut address, end) = usable_frame_bounds(region)?;
+            while address < end {
+                let frame_end = address
+                    .checked_add(FRAME_SIZE)
+                    .ok_or(BitmapAllocatorError::AddressOverflow)?;
+                let reserved = reservations
+                    .iter()
+                    .any(|range| range.overlaps_frame(address, frame_end));
+                if !reserved {
+                    bitmap[index / 64] &= !(1u64 << (index % 64));
+                }
+                index = index
+                    .checked_add(1)
+                    .ok_or(BitmapAllocatorError::AddressOverflow)?;
+                address = frame_end;
+            }
+        }
+
+        Ok(Self { regions, reservations, bitmap, frame_count })
+    }
+
+    /// Allocate the first free physical frame.
+    pub fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        for word_index in 0..self.bitmap.len() {
+            let free_bits = !self.bitmap[word_index];
+            if free_bits == 0 {
+                continue;
+            }
+            let bit = free_bits.trailing_zeros() as usize;
+            let index = word_index.checked_mul(64)?.checked_add(bit)?;
+            if index >= self.frame_count {
+                return None;
+            }
+            let frame = self.frame_at_index(index)?;
+            self.bitmap[word_index] |= 1u64 << bit;
+            return Some(frame);
+        }
+        None
+    }
+
+    /// Return a previously allocated frame to the free pool.
+    ///
+    /// Reserved ranges are never freeable, even if a caller supplies a frame
+    /// address that overlaps one. Double-free and non-usable addresses fail.
+    pub fn free_frame(&mut self, frame: PhysFrame) -> Result<(), BitmapAllocatorError> {
+        if frame.start % FRAME_SIZE != 0 {
+            return Err(BitmapAllocatorError::FrameNotUsable);
+        }
+        let end = frame
+            .start
+            .checked_add(FRAME_SIZE)
+            .ok_or(BitmapAllocatorError::AddressOverflow)?;
+        if self.reservations.iter().any(|range| range.overlaps_frame(frame.start, end)) {
+            return Err(BitmapAllocatorError::FrameNotUsable);
+        }
+
+        let index = self.index_of_frame(frame.start)?;
+        let word = index / 64;
+        let mask = 1u64 << (index % 64);
+        if self.bitmap[word] & mask == 0 {
+            return Err(BitmapAllocatorError::DoubleFree);
+        }
+        self.bitmap[word] &= !mask;
+        Ok(())
+    }
+
+    /// Number of usable frames represented by this bitmap.
+    pub const fn frame_count(&self) -> usize {
+        self.frame_count
+    }
+
+    /// Number of currently free frames.
+    pub fn free_count(&self) -> usize {
+        self.bitmap
+            .iter()
+            .enumerate()
+            .map(|(word_index, word)| {
+                let remaining = self.frame_count.saturating_sub(word_index * 64).min(64);
+                ((!word).count_ones() as usize).min(remaining)
+            })
+            .sum()
+    }
+
+    fn frame_at_index(&self, target: usize) -> Option<PhysFrame> {
+        let mut index = 0usize;
+        for region in self.regions {
+            if region.kind != memory_kind::USABLE {
+                continue;
+            }
+            let (mut address, end) = usable_frame_bounds(region).ok()?;
+            while address < end {
+                if index == target {
+                    return Some(PhysFrame { start: address });
+                }
+                index = index.checked_add(1)?;
+                address = address.checked_add(FRAME_SIZE)?;
+            }
+        }
+        None
+    }
+
+    fn index_of_frame(&self, target: u64) -> Result<usize, BitmapAllocatorError> {
+        let mut index = 0usize;
+        for region in self.regions {
+            if region.kind != memory_kind::USABLE {
+                continue;
+            }
+            let (start, end) = usable_frame_bounds(region)?;
+            if target >= start && target.checked_add(FRAME_SIZE).is_some_and(|frame_end| frame_end <= end) {
+                return Ok(index + ((target - start) / FRAME_SIZE) as usize);
+            }
+            let frames = ((end - start) / FRAME_SIZE) as usize;
+            index = index.checked_add(frames).ok_or(BitmapAllocatorError::AddressOverflow)?;
+        }
+        Err(BitmapAllocatorError::FrameNotUsable)
+    }
+}
+
+fn usable_frame_count(regions: &[MemoryRegion]) -> Result<usize, BitmapAllocatorError> {
+    let mut total = 0usize;
+    for region in regions {
+        if region.kind != memory_kind::USABLE {
+            continue;
+        }
+        let (start, end) = usable_frame_bounds(region)?;
+        let frames = usize::try_from((end - start) / FRAME_SIZE)
+            .map_err(|_| BitmapAllocatorError::AddressOverflow)?;
+        total = total.checked_add(frames).ok_or(BitmapAllocatorError::AddressOverflow)?;
+    }
+    Ok(total)
+}
+
+fn usable_frame_bounds(region: &MemoryRegion) -> Result<(u64, u64), BitmapAllocatorError> {
+    let region_end = region
+        .physical_start
+        .checked_add(region.length)
+        .ok_or(BitmapAllocatorError::AddressOverflow)?;
+    let start = align_up(region.physical_start, FRAME_SIZE)
+        .ok_or(BitmapAllocatorError::AddressOverflow)?;
+    let end = region_end & !(FRAME_SIZE - 1);
+    Ok((start.min(end), end))
+}
+
 const fn align_up(value: u64, alignment: u64) -> Option<u64> {
     let mask = alignment - 1;
     match value.checked_add(mask) {
