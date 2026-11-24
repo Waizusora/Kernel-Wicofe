@@ -153,6 +153,156 @@ pub fn translate_uefi_memory_map(
     Ok(count)
 }
 
+/// A page-aligned, loader-owned physical range that must remain unavailable to allocators.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryReservation {
+    pub physical_start: u64,
+    pub length: u64,
+    pub kind: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReservationError {
+    InvalidRange,
+    UnsupportedKind,
+    UnsortedOrOverlappingReservations,
+    NotContainedInLoaderMemory,
+    AddressOverflow,
+    OutputTooSmall,
+}
+
+fn push_region(
+    output: &mut [MemoryRegion],
+    count: &mut usize,
+    region: MemoryRegion,
+) -> Result<(), ReservationError> {
+    if region.length == 0 {
+        return Ok(());
+    }
+    if *count != 0 {
+        let previous = output[*count - 1];
+        let previous_end = previous
+            .physical_start
+            .checked_add(previous.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        if previous_end == region.physical_start
+            && previous.kind == region.kind
+            && previous.attributes == region.attributes
+        {
+            output[*count - 1].length = previous
+                .length
+                .checked_add(region.length)
+                .ok_or(ReservationError::AddressOverflow)?;
+            return Ok(());
+        }
+    }
+    if *count == output.len() {
+        return Err(ReservationError::OutputTooSmall);
+    }
+    output[*count] = region;
+    *count += 1;
+    Ok(())
+}
+
+/// Overlay explicit reservations on canonical UEFI regions.
+///
+/// Reservations must be sorted, page-aligned, non-overlapping, and fully
+/// contained in one BOOTLOADER_RECLAIM region. Original cache/runtime
+/// attributes are preserved. The input map is not modified.
+pub fn apply_memory_reservations(
+    regions: &[MemoryRegion],
+    reservations: &[MemoryReservation],
+    output: &mut [MemoryRegion],
+) -> Result<usize, ReservationError> {
+    let mut previous_reservation_end = 0_u64;
+    for reservation in reservations {
+        if reservation.length == 0
+            || reservation.physical_start % EFI_PAGE_SIZE != 0
+            || reservation.length % EFI_PAGE_SIZE != 0
+        {
+            return Err(ReservationError::InvalidRange);
+        }
+        if reservation.kind != memory_kind::KERNEL && reservation.kind != memory_kind::BOOT_INFO {
+            return Err(ReservationError::UnsupportedKind);
+        }
+        let end = reservation
+            .physical_start
+            .checked_add(reservation.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        if reservation.physical_start < previous_reservation_end {
+            return Err(ReservationError::UnsortedOrOverlappingReservations);
+        }
+        previous_reservation_end = end;
+    }
+
+    let mut count = 0usize;
+    let mut reservation_index = 0usize;
+    for region in regions {
+        let region_end = region
+            .physical_start
+            .checked_add(region.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        let mut cursor = region.physical_start;
+
+        while reservation_index < reservations.len()
+            && reservations[reservation_index].physical_start < region_end
+        {
+            let reservation = reservations[reservation_index];
+            let reservation_end = reservation
+                .physical_start
+                .checked_add(reservation.length)
+                .ok_or(ReservationError::AddressOverflow)?;
+            if reservation.physical_start < cursor || reservation_end > region_end {
+                return Err(ReservationError::NotContainedInLoaderMemory);
+            }
+            if region.kind != memory_kind::BOOTLOADER_RECLAIM {
+                return Err(ReservationError::NotContainedInLoaderMemory);
+            }
+
+            push_region(
+                output,
+                &mut count,
+                MemoryRegion {
+                    physical_start: cursor,
+                    length: reservation.physical_start - cursor,
+                    kind: region.kind,
+                    attributes: region.attributes,
+                },
+            )?;
+            push_region(
+                output,
+                &mut count,
+                MemoryRegion {
+                    physical_start: reservation.physical_start,
+                    length: reservation.length,
+                    kind: reservation.kind,
+                    attributes: region.attributes,
+                },
+            )?;
+            cursor = reservation_end;
+            reservation_index += 1;
+        }
+
+        push_region(
+            output,
+            &mut count,
+            MemoryRegion {
+                physical_start: cursor,
+                length: region_end
+                    .checked_sub(cursor)
+                    .ok_or(ReservationError::AddressOverflow)?,
+                kind: region.kind,
+                attributes: region.attributes,
+            },
+        )?;
+    }
+
+    if reservation_index != reservations.len() {
+        return Err(ReservationError::NotContainedInLoaderMemory);
+    }
+    Ok(count)
+}
+
 /// Errors returned while decoding a firmware-provided EFI memory-map buffer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DescriptorDecodeError {
@@ -532,6 +682,145 @@ mod tests {
         assert_eq!(
             translate_uefi_memory_map(&input, &mut output),
             Err(MemoryMapError::OutputTooSmall)
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod reservation_tests {
+    use super::*;
+
+    fn region(start: u64, pages: u64, kind: u32, attributes: u32) -> MemoryRegion {
+        MemoryRegion {
+            physical_start: start,
+            length: pages * EFI_PAGE_SIZE,
+            kind,
+            attributes,
+        }
+    }
+
+    fn reservation(start: u64, pages: u64, kind: u32) -> MemoryReservation {
+        MemoryReservation {
+            physical_start: start,
+            length: pages * EFI_PAGE_SIZE,
+            kind,
+        }
+    }
+
+    #[test]
+    fn overlays_kernel_and_boot_info_ranges_and_preserves_attributes() {
+        let input = [region(
+            0x1000,
+            10,
+            memory_kind::BOOTLOADER_RECLAIM,
+            memory_attribute::CACHE_WRITE_BACK,
+        )];
+        let reservations = [
+            reservation(0x2000, 2, memory_kind::KERNEL),
+            reservation(0x7000, 1, memory_kind::BOOT_INFO),
+        ];
+        let mut output = [MemoryRegion::default(); 5];
+
+        let count = apply_memory_reservations(&input, &reservations, &mut output).unwrap();
+        assert_eq!(count, 5);
+        assert_eq!(output[0], region(0x1000, 1, memory_kind::BOOTLOADER_RECLAIM, 1));
+        assert_eq!(output[1], region(0x2000, 2, memory_kind::KERNEL, 1));
+        assert_eq!(output[2], region(0x4000, 3, memory_kind::BOOTLOADER_RECLAIM, 1));
+        assert_eq!(output[3], region(0x7000, 1, memory_kind::BOOT_INFO, 1));
+        assert_eq!(output[4], region(0x8000, 3, memory_kind::BOOTLOADER_RECLAIM, 1));
+    }
+
+    #[test]
+    fn rejects_unaligned_empty_overlapping_and_unsorted_reservations() {
+        let input = [region(0x1000, 8, memory_kind::BOOTLOADER_RECLAIM, 0)];
+        let mut output = [MemoryRegion::default(); 8];
+        assert_eq!(
+            apply_memory_reservations(&input, &[reservation(0x1001, 1, memory_kind::KERNEL)], &mut output),
+            Err(ReservationError::InvalidRange)
+        );
+        assert_eq!(
+            apply_memory_reservations(&input, &[reservation(0x2000, 0, memory_kind::KERNEL)], &mut output),
+            Err(ReservationError::InvalidRange)
+        );
+        assert_eq!(
+            apply_memory_reservations(
+                &input,
+                &[
+                    reservation(0x3000, 2, memory_kind::KERNEL),
+                    reservation(0x2000, 1, memory_kind::BOOT_INFO),
+                ],
+                &mut output,
+            ),
+            Err(ReservationError::UnsortedOrOverlappingReservations)
+        );
+        assert_eq!(
+            apply_memory_reservations(
+                &input,
+                &[
+                    reservation(0x2000, 2, memory_kind::KERNEL),
+                    reservation(0x3000, 1, memory_kind::BOOT_INFO),
+                ],
+                &mut output,
+            ),
+            Err(ReservationError::UnsortedOrOverlappingReservations)
+        );
+    }
+
+    #[test]
+    fn refuses_to_promote_usable_or_uncovered_memory() {
+        let usable = [region(0x1000, 4, memory_kind::USABLE, 0)];
+        let mut output = [MemoryRegion::default(); 4];
+        assert_eq!(
+            apply_memory_reservations(
+                &usable,
+                &[reservation(0x2000, 1, memory_kind::KERNEL)],
+                &mut output,
+            ),
+            Err(ReservationError::NotContainedInLoaderMemory)
+        );
+        let loader = [region(0x1000, 2, memory_kind::BOOTLOADER_RECLAIM, 0)];
+        assert_eq!(
+            apply_memory_reservations(
+                &loader,
+                &[reservation(0x3000, 1, memory_kind::BOOT_INFO)],
+                &mut output,
+            ),
+            Err(ReservationError::NotContainedInLoaderMemory)
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_kinds_overflow_and_insufficient_output() {
+        let input = [region(0x1000, 4, memory_kind::BOOTLOADER_RECLAIM, 0)];
+        let mut output = [MemoryRegion::default(); 2];
+        assert_eq!(
+            apply_memory_reservations(
+                &input,
+                &[reservation(0x2000, 1, memory_kind::USABLE)],
+                &mut output,
+            ),
+            Err(ReservationError::UnsupportedKind)
+        );
+        assert_eq!(
+            apply_memory_reservations(
+                &input,
+                &[MemoryReservation {
+                    physical_start: u64::MAX - 0xfff,
+                    length: EFI_PAGE_SIZE,
+                    kind: memory_kind::KERNEL,
+                }],
+                &mut output,
+            ),
+            Err(ReservationError::AddressOverflow)
+        );
+        assert_eq!(
+            apply_memory_reservations(
+                &input,
+                &[reservation(0x2000, 1, memory_kind::KERNEL)],
+                &mut output,
+            ),
+            Err(ReservationError::OutputTooSmall)
         );
     }
 }
