@@ -192,8 +192,7 @@ mod tests {
     fn validated_handoff_provides_allocator_for_canonical_map() {
         let info = valid_info(architecture::X86_64);
         let map = valid_map();
-        let handoff =
-            ValidatedBootHandoff::new(architecture::X86_64, &info, &map).unwrap();
+        let handoff = ValidatedBootHandoff::new(architecture::X86_64, &info, &map).unwrap();
         let mut allocator = handoff.frame_allocator();
 
         assert_eq!(handoff.info().architecture, architecture::X86_64);
