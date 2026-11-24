@@ -497,6 +497,54 @@ mod tests {
     }
 
     #[test]
+    fn reservation_manager_tracks_ranges_and_releases_exact_entries() {
+        let empty = PhysicalRange::new(0, 1).unwrap();
+        let mut storage = [empty; 2];
+        let mut manager = ReservationManager::new(&mut storage);
+
+        let first = manager.reserve(0x1000, 0x1000).unwrap();
+        let second = manager.reserve(0x2000, 0x1000).unwrap();
+        assert_eq!(manager.len(), 2);
+        assert_eq!(manager.capacity(), 2);
+        assert!(!manager.is_empty());
+        assert_eq!(manager.ranges(), &[first, second]);
+        assert!(manager.overlaps(PhysicalRange::new(0x1800, 0x100).unwrap()));
+        assert!(!manager.overlaps(PhysicalRange::new(0x4000, 0x100).unwrap()));
+
+        manager.release(first).unwrap();
+        assert_eq!(manager.ranges(), &[second]);
+        assert_eq!(
+            manager.release(first),
+            Err(ReservationError::NotFound)
+        );
+        assert_eq!(manager.reserve(0x4000, 0x1000), Ok(first));
+        assert_eq!(manager.len(), 2);
+    }
+
+    #[test]
+    fn reservation_manager_rejects_invalid_overlapping_and_excess_ranges() {
+        let empty = PhysicalRange::new(0, 1).unwrap();
+        let mut storage = [empty; 1];
+        let mut manager = ReservationManager::new(&mut storage);
+
+        assert_eq!(manager.reserve(0x1000, 0), Err(ReservationError::InvalidRange));
+        assert_eq!(
+            manager.reserve(u64::MAX - 7, 8),
+            Err(ReservationError::InvalidRange)
+        );
+        manager.reserve(0x4000, 0x1000).unwrap();
+        assert_eq!(
+            manager.reserve(0x4800, 0x1000),
+            Err(ReservationError::Overlap)
+        );
+        assert_eq!(
+            manager.reserve(0x6000, 0x1000),
+            Err(ReservationError::CapacityExceeded)
+        );
+        assert_eq!(manager.len(), 1);
+    }
+
+    #[test]
     fn bitmap_allocator_compacts_usable_regions_and_reuses_freed_frames() {
         let map = [
             region(0x1000, 0x2000, memory_kind::RESERVED),
