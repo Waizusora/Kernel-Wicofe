@@ -1069,6 +1069,7 @@ mod tests {
 
 mod memory_map;
 pub use memory_map::{
-    DescriptorDecodeError, MemoryMapError, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
+    DescriptorDecodeError, MemoryMapError, MemoryReservation, ReservationError,
+    UefiMemoryDescriptor, apply_memory_reservations, decode_uefi_memory_descriptors,
     translate_uefi_memory_map,
 };
