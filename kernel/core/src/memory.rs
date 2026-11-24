@@ -40,6 +40,103 @@ impl PhysicalRange {
     }
 }
 
+/// Errors returned by the fixed-capacity reservation manager.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReservationError {
+    /// The requested range is empty or its end address overflows.
+    InvalidRange,
+    /// The reservation overlaps an existing reservation.
+    Overlap,
+    /// The caller-provided reservation buffer is full.
+    CapacityExceeded,
+    /// No reservation exactly matches the requested range.
+    NotFound,
+}
+
+/// Allocation-free manager for physical ranges that must not be handed out.
+///
+/// Storage is supplied by the caller. Reservations are kept in insertion order;
+/// overlapping entries are rejected, while adjacent entries remain distinct.
+pub struct ReservationManager<'a> {
+    entries: &'a mut [PhysicalRange],
+    len: usize,
+}
+
+impl<'a> ReservationManager<'a> {
+    /// Create an empty manager over caller-owned reservation storage.
+    pub const fn new(entries: &'a mut [PhysicalRange]) -> Self {
+        Self { entries, len: 0 }
+    }
+
+    /// Reserve a non-empty physical address range.
+    pub fn reserve(
+        &mut self,
+        start: u64,
+        length: u64,
+    ) -> Result<PhysicalRange, ReservationError> {
+        let range = PhysicalRange::new(start, length).ok_or(ReservationError::InvalidRange)?;
+        self.reserve_range(range)?;
+        Ok(range)
+    }
+
+    /// Insert an already validated physical range.
+    pub fn reserve_range(&mut self, range: PhysicalRange) -> Result<(), ReservationError> {
+        if range.length == 0 || range.start.checked_add(range.length).is_none() {
+            return Err(ReservationError::InvalidRange);
+        }
+        if self.entries[..self.len]
+            .iter()
+            .any(|existing| existing.start < range.end() && range.start < existing.end())
+        {
+            return Err(ReservationError::Overlap);
+        }
+        if self.len == self.entries.len() {
+            return Err(ReservationError::CapacityExceeded);
+        }
+        self.entries[self.len] = range;
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Release a reservation only when its exact range is present.
+    pub fn release(&mut self, range: PhysicalRange) -> Result<(), ReservationError> {
+        let index = self.entries[..self.len]
+            .iter()
+            .position(|entry| *entry == range)
+            .ok_or(ReservationError::NotFound)?;
+        self.entries.copy_within(index + 1..self.len, index);
+        self.len -= 1;
+        Ok(())
+    }
+
+    /// Check whether any reservation intersects the supplied address range.
+    pub fn overlaps(&self, range: PhysicalRange) -> bool {
+        self.entries[..self.len]
+            .iter()
+            .any(|entry| entry.start < range.end() && range.start < entry.end())
+    }
+
+    /// Return the active reservations as a compact immutable slice.
+    pub fn ranges(&self) -> &[PhysicalRange] {
+        &self.entries[..self.len]
+    }
+
+    /// Number of active reservations.
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the manager currently has no reservations.
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Maximum number of reservations this manager can hold.
+    pub const fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// A physical 4 KiB frame base address.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PhysFrame {
