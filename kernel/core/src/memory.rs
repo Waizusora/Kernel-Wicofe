@@ -514,7 +514,10 @@ mod tests {
         manager.release(first).unwrap();
         assert_eq!(manager.ranges(), &[second]);
         assert_eq!(manager.release(first), Err(ReservationError::NotFound));
-        assert_eq!(manager.reserve(0x4000, 0x1000), PhysicalRange::new(0x4000, 0x1000).ok_or(ReservationError::InvalidRange));
+        assert_eq!(
+            manager.reserve(0x4000, 0x1000),
+            PhysicalRange::new(0x4000, 0x1000).ok_or(ReservationError::InvalidRange)
+        );
         assert_eq!(manager.len(), 2);
     }
 
