@@ -69,11 +69,7 @@ impl<'a> ReservationManager<'a> {
     }
 
     /// Reserve a non-empty physical address range.
-    pub fn reserve(
-        &mut self,
-        start: u64,
-        length: u64,
-    ) -> Result<PhysicalRange, ReservationError> {
+    pub fn reserve(&mut self, start: u64, length: u64) -> Result<PhysicalRange, ReservationError> {
         let range = PhysicalRange::new(start, length).ok_or(ReservationError::InvalidRange)?;
         self.reserve_range(range)?;
         Ok(range)
