@@ -152,7 +152,10 @@ impl<'a> FrameAllocator<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BitmapAllocatorError {
     /// The caller-provided bitmap does not contain enough words.
-    BitmapTooSmall { required_words: usize, provided_words: usize },
+    BitmapTooSmall {
+        required_words: usize,
+        provided_words: usize,
+    },
     /// A memory-region boundary or aggregate frame count overflowed.
     AddressOverflow,
     /// A reservation is empty or its end address overflows.
@@ -236,7 +239,12 @@ impl<'a> BitmapFrameAllocator<'a> {
             }
         }
 
-        Ok(Self { regions, reservations, bitmap, frame_count })
+        Ok(Self {
+            regions,
+            reservations,
+            bitmap,
+            frame_count,
+        })
     }
 
     /// Allocate the first free physical frame.
@@ -270,7 +278,11 @@ impl<'a> BitmapFrameAllocator<'a> {
             .start
             .checked_add(FRAME_SIZE)
             .ok_or(BitmapAllocatorError::AddressOverflow)?;
-        if self.reservations.iter().any(|range| range.overlaps_frame(frame.start, end)) {
+        if self
+            .reservations
+            .iter()
+            .any(|range| range.overlaps_frame(frame.start, end))
+        {
             return Err(BitmapAllocatorError::FrameNotUsable);
         }
 
@@ -326,11 +338,17 @@ impl<'a> BitmapFrameAllocator<'a> {
                 continue;
             }
             let (start, end) = usable_frame_bounds(region)?;
-            if target >= start && target.checked_add(FRAME_SIZE).is_some_and(|frame_end| frame_end <= end) {
+            if target >= start
+                && target
+                    .checked_add(FRAME_SIZE)
+                    .is_some_and(|frame_end| frame_end <= end)
+            {
                 return Ok(index + ((target - start) / FRAME_SIZE) as usize);
             }
             let frames = ((end - start) / FRAME_SIZE) as usize;
-            index = index.checked_add(frames).ok_or(BitmapAllocatorError::AddressOverflow)?;
+            index = index
+                .checked_add(frames)
+                .ok_or(BitmapAllocatorError::AddressOverflow)?;
         }
         Err(BitmapAllocatorError::FrameNotUsable)
     }
@@ -345,7 +363,9 @@ fn usable_frame_count(regions: &[MemoryRegion]) -> Result<usize, BitmapAllocator
         let (start, end) = usable_frame_bounds(region)?;
         let frames = usize::try_from((end - start) / FRAME_SIZE)
             .map_err(|_| BitmapAllocatorError::AddressOverflow)?;
-        total = total.checked_add(frames).ok_or(BitmapAllocatorError::AddressOverflow)?;
+        total = total
+            .checked_add(frames)
+            .ok_or(BitmapAllocatorError::AddressOverflow)?;
     }
     Ok(total)
 }
@@ -355,8 +375,8 @@ fn usable_frame_bounds(region: &MemoryRegion) -> Result<(u64, u64), BitmapAlloca
         .physical_start
         .checked_add(region.length)
         .ok_or(BitmapAllocatorError::AddressOverflow)?;
-    let start = align_up(region.physical_start, FRAME_SIZE)
-        .ok_or(BitmapAllocatorError::AddressOverflow)?;
+    let start =
+        align_up(region.physical_start, FRAME_SIZE).ok_or(BitmapAllocatorError::AddressOverflow)?;
     let end = region_end & !(FRAME_SIZE - 1);
     Ok((start.min(end), end))
 }
