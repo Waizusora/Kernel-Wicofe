@@ -459,12 +459,13 @@ mod tests {
         ];
         let mut output = [MemoryRegion::default(); 5];
 
-        assert_eq!(translate_uefi_memory_map(&input, &mut output), Ok(5));
-        for region in &output[..4] {
-            assert_eq!(region.kind, memory_kind::BOOTLOADER_RECLAIM);
-            assert_ne!(region.kind, memory_kind::USABLE);
-        }
-        assert_eq!(output[4].kind, memory_kind::USABLE);
+        assert_eq!(translate_uefi_memory_map(&input, &mut output), Ok(2));
+        assert_eq!(output[0].physical_start, 0x1000);
+        assert_eq!(output[0].length, 4 * EFI_PAGE_SIZE);
+        assert_eq!(output[0].kind, memory_kind::BOOTLOADER_RECLAIM);
+        assert_ne!(output[0].kind, memory_kind::USABLE);
+        assert_eq!(output[1].physical_start, 0x5000);
+        assert_eq!(output[1].kind, memory_kind::USABLE);
     }
 
     #[test]
