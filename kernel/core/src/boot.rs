@@ -4,7 +4,9 @@
 //! slice. Mapping arbitrary physical addresses is the responsibility of the
 //! architecture entry code and must happen before this API is called.
 
-use crate::memory::FrameAllocator;
+use crate::memory::{
+    BitmapAllocatorError, BitmapFrameAllocator, FrameAllocator, PhysicalRange,
+};
 use wicofe_bootloader_common::{
     BootInfo, BootInfoError, MemoryRegion, architecture, validate_boot_info,
 };
@@ -66,6 +68,22 @@ impl<'a> ValidatedBootHandoff<'a> {
     /// Return the validated canonical memory map.
     pub const fn memory_map(&self) -> &'a [MemoryRegion] {
         self.memory_map
+    }
+
+    /// Create a bitmap allocator from this validated memory map.
+    ///
+    /// The caller supplies storage for the bitmap and any additional physical
+    /// reservations. The bitmap storage itself must already be backed by memory
+    /// that is not available to the allocator (normally reserved by the WBL map).
+    pub fn bitmap_frame_allocator<'b>(
+        &'b self,
+        reservations: &'b [PhysicalRange],
+        bitmap: &'b mut [u64],
+    ) -> Result<BitmapFrameAllocator<'b>, BitmapAllocatorError>
+    where
+        'a: 'b,
+    {
+        BitmapFrameAllocator::new(self.memory_map, reservations, bitmap)
     }
 
     /// Create the early allocator over regions marked USABLE by the handoff.
@@ -186,6 +204,20 @@ mod tests {
                 BootInfoError::InvalidMagic
             ))
         );
+    }
+
+    #[test]
+    fn validated_handoff_initializes_bitmap_allocator() {
+        let info = valid_info(architecture::X86_64);
+        let map = valid_map();
+        let handoff = ValidatedBootHandoff::new(architecture::X86_64, &info, &map).unwrap();
+        let mut bitmap = [0u64; 16];
+        let mut allocator = handoff
+            .bitmap_frame_allocator(&[], &mut bitmap)
+            .unwrap();
+
+        assert_eq!(allocator.frame_count(), 1024);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0020_0000);
     }
 
     #[test]
