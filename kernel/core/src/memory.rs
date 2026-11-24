@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn bitmap_allocator_keeps_reserved_frames_unavailable() {
-        let map = [region(0x4000, 0x4000, memory_kind::USABLE)];
+        let map = [region(0x4000, 0x3000, memory_kind::USABLE)];
         let reservations = [PhysicalRange::new(0x5001, 1).unwrap()];
         let mut bitmap = [0u64; 1];
         let mut allocator = BitmapFrameAllocator::new(&map, &reservations, &mut bitmap).unwrap();
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn bitmap_allocator_rejects_insufficient_metadata() {
-        let map = [region(0x4000, 0x1_0000, memory_kind::USABLE)];
+        let map = [region(0x4000, 0x1_1000, memory_kind::USABLE)];
         let mut bitmap = [0u64; 1];
         assert_eq!(
             BitmapFrameAllocator::new(&map, &[], &mut bitmap).err(),
