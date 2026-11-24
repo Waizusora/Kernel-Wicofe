@@ -404,6 +404,89 @@ mod tests {
     }
 
     #[test]
+    fn bitmap_allocator_compacts_usable_regions_and_reuses_freed_frames() {
+        let map = [
+            region(0x1000, 0x2000, memory_kind::RESERVED),
+            region(0x4000, 0x2000, memory_kind::USABLE),
+            region(0x8000, 0x1000, memory_kind::BOOT_INFO),
+            region(0xa000, 0x2000, memory_kind::USABLE),
+        ];
+        let words = BitmapFrameAllocator::required_words(&map).unwrap();
+        assert_eq!(words, 1);
+        let mut bitmap = [0u64; 1];
+        let mut allocator = BitmapFrameAllocator::new(&map, &[], &mut bitmap).unwrap();
+
+        assert_eq!(allocator.frame_count(), 4);
+        assert_eq!(allocator.free_count(), 4);
+        let first = allocator.allocate_frame().unwrap();
+        let second = allocator.allocate_frame().unwrap();
+        assert_eq!(first.start(), 0x4000);
+        assert_eq!(second.start(), 0x5000);
+        allocator.free_frame(first).unwrap();
+        assert_eq!(allocator.free_count(), 3);
+        assert_eq!(allocator.allocate_frame().unwrap(), first);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0xa000);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0xb000);
+        assert_eq!(allocator.allocate_frame(), None);
+    }
+
+    #[test]
+    fn bitmap_allocator_keeps_reserved_frames_unavailable() {
+        let map = [region(0x4000, 0x4000, memory_kind::USABLE)];
+        let reservations = [PhysicalRange::new(0x5001, 1).unwrap()];
+        let mut bitmap = [0u64; 1];
+        let mut allocator =
+            BitmapFrameAllocator::new(&map, &reservations, &mut bitmap).unwrap();
+
+        assert_eq!(allocator.free_count(), 2);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x4000);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x6000);
+        assert_eq!(allocator.allocate_frame(), None);
+        assert_eq!(
+            allocator.free_frame(PhysFrame { start: 0x5000 }),
+            Err(BitmapAllocatorError::FrameNotUsable)
+        );
+    }
+
+    #[test]
+    fn bitmap_allocator_rejects_double_free_and_non_usable_frames() {
+        let map = [
+            region(0x4000, 0x2000, memory_kind::USABLE),
+            region(0x8000, 0x1000, memory_kind::RESERVED),
+        ];
+        let mut bitmap = [0u64; 1];
+        let mut allocator = BitmapFrameAllocator::new(&map, &[], &mut bitmap).unwrap();
+        let frame = allocator.allocate_frame().unwrap();
+
+        allocator.free_frame(frame).unwrap();
+        assert_eq!(
+            allocator.free_frame(frame),
+            Err(BitmapAllocatorError::DoubleFree)
+        );
+        assert_eq!(
+            allocator.free_frame(PhysFrame { start: 0x8000 }),
+            Err(BitmapAllocatorError::FrameNotUsable)
+        );
+        assert_eq!(
+            allocator.free_frame(PhysFrame { start: 0x4001 }),
+            Err(BitmapAllocatorError::FrameNotUsable)
+        );
+    }
+
+    #[test]
+    fn bitmap_allocator_rejects_insufficient_metadata() {
+        let map = [region(0x4000, 0x1_0000, memory_kind::USABLE)];
+        let mut bitmap = [0u64; 1];
+        assert_eq!(
+            BitmapFrameAllocator::new(&map, &[], &mut bitmap).err(),
+            Some(BitmapAllocatorError::BitmapTooSmall {
+                required_words: 2,
+                provided_words: 1,
+            })
+        );
+    }
+
+    #[test]
     fn allocates_only_from_usable_regions() {
         let map = [
             region(0x1000, 0x2000, memory_kind::RESERVED),
