@@ -560,9 +560,7 @@ unsafe fn refresh_prepared_boot_info(
         .ok_or(EFI_INVALID_PARAMETER)?;
     let raw_map_start = prepared.raw_map as u64;
     let raw_map_end = raw_map_start
-        .checked_add(
-            u64::try_from(prepared.raw_map_capacity).map_err(|_| EFI_INVALID_PARAMETER)?,
-        )
+        .checked_add(u64::try_from(prepared.raw_map_capacity).map_err(|_| EFI_INVALID_PARAMETER)?)
         .ok_or(EFI_INVALID_PARAMETER)?;
     let metadata_start = info_start
         .min(regions_start)
