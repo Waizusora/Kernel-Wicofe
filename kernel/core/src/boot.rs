@@ -5,17 +5,14 @@
 //! architecture entry code and must happen before this API is called.
 
 use wicofe_bootloader_common::{
-    architecture, validate_boot_info, BootInfo, BootInfoError, MemoryRegion,
+    BootInfo, BootInfoError, MemoryRegion, architecture, validate_boot_info,
 };
 
 /// Failure while validating the boot contract for this kernel image.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelBootError {
     InvalidBootInfo(BootInfoError),
-    ArchitectureMismatch {
-        expected: u32,
-        actual: u32,
-    },
+    ArchitectureMismatch { expected: u32, actual: u32 },
 }
 
 /// Validate ABI v2 metadata and ensure the handoff targets this architecture.
@@ -52,7 +49,9 @@ pub fn validate_boot_handoff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wicofe_bootloader_common::{memory_attribute, memory_kind, BOOT_INFO_MAGIC, BOOT_INFO_VERSION};
+    use wicofe_bootloader_common::{
+        BOOT_INFO_MAGIC, BOOT_INFO_VERSION, memory_attribute, memory_kind,
+    };
 
     fn valid_map() -> [MemoryRegion; 2] {
         [
