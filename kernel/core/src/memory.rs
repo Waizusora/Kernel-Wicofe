@@ -5,7 +5,7 @@
 //! validate BootInfo and the complete memory map, and must ensure that the
 //! map excludes every live kernel, loader, page-table, and handoff allocation.
 
-use wicofe_bootloader_common::{memory_kind, MemoryRegion};
+use wicofe_bootloader_common::{MemoryRegion, memory_kind};
 
 /// Base page size used by ABI v2.
 pub const FRAME_SIZE: u64 = 4096;
