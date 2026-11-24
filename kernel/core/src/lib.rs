@@ -2,8 +2,10 @@
 
 //! Architecture-independent kernel foundation.
 //!
-//! No scheduler, allocator, interrupt controller, or syscall implementation is
-//! present yet. Those subsystems will be introduced in separately tested steps.
+//! The core validates the versioned boot contract before architecture code
+//! consumes physical addresses or memory-map entries.
+
+pub mod boot;
 
 pub use wicofe_bootloader_common::BootInfo;
 
