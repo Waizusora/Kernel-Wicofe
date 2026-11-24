@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn bitmap_allocator_rejects_insufficient_metadata() {
-        let map = [region(0x4000, 0x1_1000, memory_kind::USABLE)];
+        let map = [region(0x4000, 0x4_1000, memory_kind::USABLE)];
         let mut bitmap = [0u64; 1];
         assert_eq!(
             BitmapFrameAllocator::new(&map, &[], &mut bitmap).err(),
