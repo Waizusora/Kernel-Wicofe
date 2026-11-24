@@ -5,7 +5,7 @@ use core::ffi::c_void;
 use core::panic::PanicInfo;
 use wicofe_bootloader_common::{
     BOOT_INFO_MAGIC, BOOT_INFO_VERSION, BOOTSTRAP_STACK_LAYOUT, BootInfo, MemoryRegion,
-    architecture, bootstrap_stack_top, validate_boot_info,
+    architecture, bootstrap_stack_top, memory_kind, validate_boot_info,
 };
 #[cfg(target_arch = "aarch64")]
 use wicofe_bootloader_elf::EM_AARCH64;
@@ -234,7 +234,9 @@ struct PreparedBootInfo {
     raw_map_capacity: usize,
     descriptors: *mut UefiMemoryDescriptor,
     descriptor_capacity: usize,
+    region_capacity: usize,
     descriptor_count: usize,
+    kernel_reservation: wicofe_bootloader_uefi::MemoryReservation,
     map_key: usize,
 }
 
@@ -296,6 +298,9 @@ unsafe fn prepare_boot_info(
             .ok_or(EFI_INVALID_PARAMETER)?
             / descriptor_size;
         let raw_map = unsafe { allocate_pool(services, capacity)? };
+        let region_capacity = descriptor_capacity
+            .checked_add(8)
+            .ok_or(EFI_INVALID_PARAMETER)?;
         let descriptors = match unsafe {
             allocate_array::<UefiMemoryDescriptor>(services, descriptor_capacity)
         } {
@@ -305,7 +310,7 @@ unsafe fn prepare_boot_info(
                 return Err(error);
             }
         };
-        let regions = match unsafe { allocate_array::<MemoryRegion>(services, descriptor_capacity) }
+        let regions = match unsafe { allocate_array::<MemoryRegion>(services, region_capacity) }
         {
             Ok(pointer) => pointer,
             Err(error) => {
@@ -398,8 +403,8 @@ unsafe fn prepare_boot_info(
             };
         // SAFETY: only decoded_count descriptor slots were initialized.
         let decoded = unsafe { core::slice::from_raw_parts(descriptors, decoded_count) };
-        // SAFETY: regions has descriptor_capacity writable entries.
-        let output = unsafe { core::slice::from_raw_parts_mut(regions, descriptor_capacity) };
+        // SAFETY: regions has region_capacity writable entries.
+        let output = unsafe { core::slice::from_raw_parts_mut(regions, region_capacity) };
         let region_count = match translate_uefi_memory_map(decoded, output) {
             Ok(count) if count != 0 => count,
             _ => {
@@ -451,7 +456,13 @@ unsafe fn prepare_boot_info(
             raw_map_capacity: capacity,
             descriptors,
             descriptor_capacity,
+            region_capacity,
             descriptor_count,
+            kernel_reservation: wicofe_bootloader_uefi::MemoryReservation {
+                physical_start: kernel.physical_base,
+                length: kernel.image_allocation_size,
+                kind: memory_kind::KERNEL,
+            },
             map_key,
         });
     }
@@ -467,6 +478,7 @@ unsafe fn prepare_boot_info(
 unsafe fn refresh_prepared_boot_info(
     services: &BootServices,
     prepared: &mut PreparedBootInfo,
+    tables: &PreparedPageTables,
 ) -> Result<(), Status> {
     let get_memory_map = services.get_memory_map.ok_or(EFI_INVALID_PARAMETER)?;
     let mut map_size = prepared.raw_map_capacity;
@@ -517,19 +529,68 @@ unsafe fn refresh_prepared_boot_info(
 
     // SAFETY: decoder initialized exactly descriptor_count entries.
     let decoded = unsafe { core::slice::from_raw_parts(prepared.descriptors, decoded_count) };
-    // SAFETY: region storage has descriptor_capacity writable entries.
+    // SAFETY: region storage has region_capacity writable entries.
     let region_output =
-        unsafe { core::slice::from_raw_parts_mut(prepared.regions, prepared.descriptor_capacity) };
-    let region_count = translate_uefi_memory_map(decoded, region_output)
+        unsafe { core::slice::from_raw_parts_mut(prepared.regions, prepared.region_capacity) };
+    let translated_count = translate_uefi_memory_map(decoded, region_output)
         .ok()
         .filter(|count| *count != 0)
         .ok_or(EFI_INVALID_PARAMETER)?;
+
+    let info_start = prepared.info as u64;
+    let info_end = info_start.checked_add(core::mem::size_of::<BootInfo>() as u64)
+        .ok_or(EFI_INVALID_PARAMETER)?;
+    let regions_start = prepared.regions as u64;
+    let regions_size = prepared.region_capacity.checked_mul(core::mem::size_of::<MemoryRegion>())
+        .and_then(|size| u64::try_from(size).ok()).ok_or(EFI_INVALID_PARAMETER)?;
+    let regions_end = regions_start.checked_add(regions_size).ok_or(EFI_INVALID_PARAMETER)?;
+    let descriptors_start = prepared.descriptors as u64;
+    let descriptors_size = prepared.descriptor_capacity.checked_mul(core::mem::size_of::<UefiMemoryDescriptor>())
+        .and_then(|size| u64::try_from(size).ok()).ok_or(EFI_INVALID_PARAMETER)?;
+    let descriptors_end = descriptors_start.checked_add(descriptors_size).ok_or(EFI_INVALID_PARAMETER)?;
+    let raw_map_start = prepared.raw_map as u64;
+    let raw_map_end = raw_map_start.checked_add(u64::try_from(prepared.raw_map_capacity).map_err(|_| EFI_INVALID_PARAMETER)?)
+        .ok_or(EFI_INVALID_PARAMETER)?;
+    let metadata_start = info_start.min(regions_start).min(descriptors_start).min(raw_map_start)
+        & !(UEFI_PAGE_SIZE - 1);
+    let metadata_end = info_end.max(regions_end).max(descriptors_end).max(raw_map_end)
+        .checked_add(UEFI_PAGE_SIZE - 1).ok_or(EFI_INVALID_PARAMETER)?
+        & !(UEFI_PAGE_SIZE - 1);
+
+    let stack_length = u64::try_from(tables.bootstrap_stack_pages).ok()
+        .and_then(|pages| pages.checked_mul(UEFI_PAGE_SIZE)).ok_or(EFI_INVALID_PARAMETER)?;
+    let table_length = u64::try_from(tables.table_pool_pages).ok()
+        .and_then(|pages| pages.checked_mul(UEFI_PAGE_SIZE)).ok_or(EFI_INVALID_PARAMETER)?;
+    let mut reservations = [
+        prepared.kernel_reservation,
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: tables.root_physical_address, length: table_length, kind: memory_kind::BOOT_INFO,
+        },
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: tables.bootstrap_stack_allocation_base, length: stack_length, kind: memory_kind::BOOT_INFO,
+        },
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: metadata_start,
+            length: metadata_end.checked_sub(metadata_start).ok_or(EFI_INVALID_PARAMETER)?,
+            kind: memory_kind::BOOT_INFO,
+        },
+    ];
+    for index in 1..reservations.len() {
+        let mut cursor = index;
+        while cursor != 0 && reservations[cursor].physical_start < reservations[cursor - 1].physical_start {
+            reservations.swap(cursor, cursor - 1);
+            cursor -= 1;
+        }
+    }
+    let region_count = wicofe_bootloader_uefi::apply_memory_reservations_in_place(
+        region_output, translated_count, &reservations,
+    ).map_err(|_| EFI_INVALID_PARAMETER)?;
 
     // SAFETY: info points to the retained, aligned BootInfo allocation.
     let boot_info = unsafe { &mut *prepared.info };
     boot_info.memory_map_address = prepared.regions as u64;
     boot_info.memory_map_entries = region_count as u64;
-    // SAFETY: the translated region slice contains region_count initialized entries.
+    // SAFETY: the overlaid region slice contains region_count initialized entries.
     let map = unsafe { core::slice::from_raw_parts(prepared.regions, region_count) };
     validate_boot_info(boot_info, map).map_err(|_| EFI_INVALID_PARAMETER)?;
 
@@ -735,6 +796,7 @@ struct LoadedKernel {
     physical_base: u64,
     virtual_base: u64,
     image_size: u64,
+    image_allocation_size: u64,
     entry: u64,
 }
 
@@ -848,6 +910,7 @@ unsafe fn load_segments(
         physical_base: aligned_base,
         virtual_base: parsed.image_base(),
         image_size: parsed.image_size(),
+        image_allocation_size: layout.rounded_image_size,
         entry: parsed.entry(),
     })
 }
@@ -859,6 +922,8 @@ struct PreparedPageTables {
     bootstrap_stack_base: u64,
     bootstrap_stack_top: u64,
     bootstrap_stack_pages: usize,
+    bootstrap_stack_allocation_base: u64,
+    table_pool_pages: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -1046,6 +1111,8 @@ unsafe fn build_architecture_page_tables(
                     bootstrap_stack_base: 0,
                     bootstrap_stack_top: 0,
                     bootstrap_stack_pages: 0,
+                    bootstrap_stack_allocation_base: 0,
+                    table_pool_pages: table_count,
                 })
             })();
             // SAFETY: addresses was allocated above.
@@ -1145,6 +1212,8 @@ unsafe fn build_architecture_page_tables(
                     bootstrap_stack_base: 0,
                     bootstrap_stack_top: 0,
                     bootstrap_stack_pages: 0,
+                    bootstrap_stack_allocation_base: 0,
+                    table_pool_pages: table_count,
                 })
             })();
             // SAFETY: addresses was allocated above.
@@ -1324,6 +1393,7 @@ unsafe fn prepare_page_tables(
             tables.bootstrap_stack_base = bootstrap_stack.stack_base;
             tables.bootstrap_stack_top = bootstrap_stack.stack_top;
             tables.bootstrap_stack_pages = bootstrap_stack.allocation_pages;
+            tables.bootstrap_stack_allocation_base = bootstrap_stack.allocation_base;
             Ok(tables)
         }
         Err(status) => {
@@ -1530,7 +1600,7 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
             let console_status = print_message(system_table, LOADED_MESSAGE);
             // SAFETY: all storage is retained; this refresh performs no allocation.
             if let Err(status) =
-                unsafe { refresh_prepared_boot_info(&*boot_services, &mut prepared) }
+                unsafe { refresh_prepared_boot_info(&*boot_services, &mut prepared, &tables) }
             {
                 return status;
             }
