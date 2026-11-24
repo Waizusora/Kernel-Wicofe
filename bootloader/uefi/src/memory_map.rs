@@ -449,6 +449,25 @@ mod tests {
     }
 
     #[test]
+    fn all_uefi_loader_owned_allocation_types_remain_non_usable() {
+        let input = [
+            descriptor(EFI_LOADER_CODE, 0x1000, 1, EFI_MEMORY_WB),
+            descriptor(EFI_LOADER_DATA, 0x2000, 1, EFI_MEMORY_WB),
+            descriptor(EFI_BOOT_SERVICES_CODE, 0x3000, 1, EFI_MEMORY_WB),
+            descriptor(EFI_BOOT_SERVICES_DATA, 0x4000, 1, EFI_MEMORY_WB),
+            descriptor(EFI_CONVENTIONAL_MEMORY, 0x5000, 1, EFI_MEMORY_WB),
+        ];
+        let mut output = [MemoryRegion::default(); 5];
+
+        assert_eq!(translate_uefi_memory_map(&input, &mut output), Ok(5));
+        for region in &output[..4] {
+            assert_eq!(region.kind, memory_kind::BOOTLOADER_RECLAIM);
+            assert_ne!(region.kind, memory_kind::USABLE);
+        }
+        assert_eq!(output[4].kind, memory_kind::USABLE);
+    }
+
+    #[test]
     fn coalesces_adjacent_regions_with_identical_classification() {
         let input = [
             descriptor(EFI_CONVENTIONAL_MEMORY, 0x1000, 2, EFI_MEMORY_WB),
