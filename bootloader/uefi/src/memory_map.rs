@@ -686,7 +686,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod reservation_tests {
     use super::*;
@@ -724,11 +723,20 @@ mod reservation_tests {
 
         let count = apply_memory_reservations(&input, &reservations, &mut output).unwrap();
         assert_eq!(count, 5);
-        assert_eq!(output[0], region(0x1000, 1, memory_kind::BOOTLOADER_RECLAIM, 1));
+        assert_eq!(
+            output[0],
+            region(0x1000, 1, memory_kind::BOOTLOADER_RECLAIM, 1)
+        );
         assert_eq!(output[1], region(0x2000, 2, memory_kind::KERNEL, 1));
-        assert_eq!(output[2], region(0x4000, 3, memory_kind::BOOTLOADER_RECLAIM, 1));
+        assert_eq!(
+            output[2],
+            region(0x4000, 3, memory_kind::BOOTLOADER_RECLAIM, 1)
+        );
         assert_eq!(output[3], region(0x7000, 1, memory_kind::BOOT_INFO, 1));
-        assert_eq!(output[4], region(0x8000, 3, memory_kind::BOOTLOADER_RECLAIM, 1));
+        assert_eq!(
+            output[4],
+            region(0x8000, 3, memory_kind::BOOTLOADER_RECLAIM, 1)
+        );
     }
 
     #[test]
@@ -736,11 +744,19 @@ mod reservation_tests {
         let input = [region(0x1000, 8, memory_kind::BOOTLOADER_RECLAIM, 0)];
         let mut output = [MemoryRegion::default(); 8];
         assert_eq!(
-            apply_memory_reservations(&input, &[reservation(0x1001, 1, memory_kind::KERNEL)], &mut output),
+            apply_memory_reservations(
+                &input,
+                &[reservation(0x1001, 1, memory_kind::KERNEL)],
+                &mut output
+            ),
             Err(ReservationError::InvalidRange)
         );
         assert_eq!(
-            apply_memory_reservations(&input, &[reservation(0x2000, 0, memory_kind::KERNEL)], &mut output),
+            apply_memory_reservations(
+                &input,
+                &[reservation(0x2000, 0, memory_kind::KERNEL)],
+                &mut output
+            ),
             Err(ReservationError::InvalidRange)
         );
         assert_eq!(
