@@ -6,6 +6,7 @@
 //! consumes physical addresses or memory-map entries.
 
 pub mod boot;
+pub mod memory;
 
 pub use wicofe_bootloader_common::BootInfo;
 
