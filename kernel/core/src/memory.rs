@@ -601,8 +601,7 @@ mod tests {
         manager.reserve(0x7001, 1).unwrap();
 
         let mut bitmap = [0u64; 1];
-        let mut allocator =
-            BitmapFrameAllocator::new(&map, manager.ranges(), &mut bitmap).unwrap();
+        let mut allocator = BitmapFrameAllocator::new(&map, manager.ranges(), &mut bitmap).unwrap();
 
         assert_eq!(allocator.free_count(), 2);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x4000);
