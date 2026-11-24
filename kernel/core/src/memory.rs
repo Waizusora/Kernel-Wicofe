@@ -513,10 +513,7 @@ mod tests {
 
         manager.release(first).unwrap();
         assert_eq!(manager.ranges(), &[second]);
-        assert_eq!(
-            manager.release(first),
-            Err(ReservationError::NotFound)
-        );
+        assert_eq!(manager.release(first), Err(ReservationError::NotFound));
         assert_eq!(manager.reserve(0x4000, 0x1000), Ok(first));
         assert_eq!(manager.len(), 2);
     }
@@ -527,7 +524,10 @@ mod tests {
         let mut storage = [empty; 1];
         let mut manager = ReservationManager::new(&mut storage);
 
-        assert_eq!(manager.reserve(0x1000, 0), Err(ReservationError::InvalidRange));
+        assert_eq!(
+            manager.reserve(0x1000, 0),
+            Err(ReservationError::InvalidRange)
+        );
         assert_eq!(
             manager.reserve(u64::MAX - 7, 8),
             Err(ReservationError::InvalidRange)
