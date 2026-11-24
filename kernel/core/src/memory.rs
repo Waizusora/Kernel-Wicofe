@@ -592,6 +592,25 @@ mod tests {
     }
 
     #[test]
+    fn reservation_manager_ranges_exclude_frames_from_bitmap_allocator() {
+        let map = [region(0x4000, 0x4000, memory_kind::USABLE)];
+        let empty = PhysicalRange::new(0, 1).unwrap();
+        let mut storage = [empty; 2];
+        let mut manager = ReservationManager::new(&mut storage);
+        manager.reserve(0x5000, 0x1000).unwrap();
+        manager.reserve(0x7001, 1).unwrap();
+
+        let mut bitmap = [0u64; 1];
+        let mut allocator =
+            BitmapFrameAllocator::new(&map, manager.ranges(), &mut bitmap).unwrap();
+
+        assert_eq!(allocator.free_count(), 2);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x4000);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x6000);
+        assert_eq!(allocator.allocate_frame(), None);
+    }
+
+    #[test]
     fn bitmap_allocator_rejects_double_free_and_non_usable_frames() {
         let map = [
             region(0x4000, 0x2000, memory_kind::USABLE),
