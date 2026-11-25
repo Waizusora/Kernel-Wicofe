@@ -24,6 +24,58 @@ pub struct HandoffCpuState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Capture the current AArch64 EL1 translation and exception state.
+///
+/// Returns an error without reading EL1-only registers when firmware is not
+/// executing at EL1. This function never changes system registers.
+///
+/// # Safety
+///
+/// The caller must execute in AArch64 state with permission to read the
+/// architectural system registers used by the ABI v2 handoff contract.
+pub unsafe fn capture_handoff_cpu_state(
+) -> Result<HandoffCpuState, HandoffCpuStateError> {
+    let current_el: u64;
+    // SAFETY: the caller guarantees AArch64 privileged execution.
+    unsafe {
+        core::arch::asm!(
+            "mrs {}, CurrentEL",
+            out(reg) current_el,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    if current_el & (0b11 << 2) != (0b01 << 2) {
+        return Err(HandoffCpuStateError::UnsupportedExceptionLevel);
+    }
+
+    let daif: u64;
+    let sctlr_el1: u64;
+    let tcr_el1: u64;
+    let mair_el1: u64;
+    let ttbr0_el1: u64;
+    let ttbr1_el1: u64;
+    // SAFETY: CurrentEL was verified as EL1 before accessing EL1 registers.
+    unsafe {
+        core::arch::asm!("mrs {}, DAIF", out(reg) daif, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, SCTLR_EL1", out(reg) sctlr_el1, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, TCR_EL1", out(reg) tcr_el1, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, MAIR_EL1", out(reg) mair_el1, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, TTBR0_EL1", out(reg) ttbr0_el1, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mrs {}, TTBR1_EL1", out(reg) ttbr1_el1, options(nomem, nostack, preserves_flags));
+    }
+
+    Ok(HandoffCpuState {
+        current_el,
+        aarch64_state: true,
+        daif,
+        sctlr_el1,
+        tcr_el1,
+        mair_el1,
+        ttbr0_el1,
+        ttbr1_el1,
+    })
+}
+
 pub enum HandoffCpuStateError {
     UnsupportedExceptionLevel,
     NotAarch64State,
