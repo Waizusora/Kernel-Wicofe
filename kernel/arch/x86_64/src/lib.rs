@@ -322,7 +322,7 @@ pub const fn validate_kernel_entry_state(
     if state.stack_pointer % 16 != 0 {
         return Err(KernelEntryStateError::MisalignedStackPointer);
     }
-    if !is_canonical_48(state.instruction_pointer) || state.instruction_pointer >> 47 != 1 {
+    if !is_canonical_48(state.instruction_pointer) || (state.instruction_pointer >> 47) & 1 != 1 {
         return Err(KernelEntryStateError::NonCanonicalInstructionPointer);
     }
     if state.cs != KERNEL_CODE_SELECTOR {
