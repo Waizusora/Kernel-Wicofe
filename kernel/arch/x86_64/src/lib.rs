@@ -260,7 +260,6 @@ pub const fn validate_handoff_cpu_state(
     Ok(())
 }
 
-
 /// Register and segment state required at the x86_64 kernel entry point.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelEntryState {
@@ -427,7 +426,6 @@ mod tests {
         );
     }
 
-
     fn valid_kernel_entry_state() -> KernelEntryState {
         KernelEntryState {
             boot_info: 0x80000,
@@ -443,39 +441,66 @@ mod tests {
 
     #[test]
     fn accepts_valid_kernel_entry_register_contract() {
-        assert_eq!(validate_kernel_entry_state(valid_kernel_entry_state()), Ok(()));
+        assert_eq!(
+            validate_kernel_entry_state(valid_kernel_entry_state()),
+            Ok(())
+        );
     }
 
     #[test]
     fn rejects_invalid_boot_info_and_stack_addresses() {
         let mut state = valid_kernel_entry_state();
         state.boot_info = 0;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::NullBootInfo));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::NullBootInfo)
+        );
         state = valid_kernel_entry_state();
         state.boot_info += 1;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::MisalignedBootInfo));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::MisalignedBootInfo)
+        );
         state = valid_kernel_entry_state();
         state.boot_info = 0x0000_8000_0000_0000;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::NonCanonicalBootInfo));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::NonCanonicalBootInfo)
+        );
         state = valid_kernel_entry_state();
         state.stack_pointer = 0;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidStackPointer));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::InvalidStackPointer)
+        );
         state = valid_kernel_entry_state();
         state.stack_pointer += 8;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::MisalignedStackPointer));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::MisalignedStackPointer)
+        );
     }
 
     #[test]
     fn rejects_invalid_entry_address_and_selectors() {
         let mut state = valid_kernel_entry_state();
         state.instruction_pointer = 0x8000;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::NonCanonicalInstructionPointer));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::NonCanonicalInstructionPointer)
+        );
         state = valid_kernel_entry_state();
         state.cs = 0x18;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidCodeSelector));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::InvalidCodeSelector)
+        );
         state = valid_kernel_entry_state();
         state.ss = 0;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::InvalidDataSelector)
+        );
         state = valid_kernel_entry_state();
         state.ds = 0;
         assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
@@ -488,10 +513,16 @@ mod tests {
     fn rejects_enabled_interrupts_and_direction_flag_at_entry() {
         let mut state = valid_kernel_entry_state();
         state.rflags |= 1 << 9;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InterruptsEnabled));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::InterruptsEnabled)
+        );
         state = valid_kernel_entry_state();
         state.rflags |= 1 << 10;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::DirectionFlagSet));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::DirectionFlagSet)
+        );
     }
 
     #[test]
