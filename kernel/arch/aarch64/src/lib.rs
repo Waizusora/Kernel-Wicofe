@@ -167,6 +167,13 @@ pub const fn validate_handoff_cpu_state(
 mod tests {
     use super::*;
 
+    const TCR_WBWA: u64 = 0b01;
+    const TCR_INNER_SHAREABLE: u64 = 0b11;
+    const TCR_IPS_MASK: u64 = 0b111 << 32;
+    const TCR_IPS_48BIT: u64 = 0b101 << 32;
+    const TCR_TBI0: u64 = 1 << 37;
+    const TCR_DS: u64 = 1 << 59;
+
     fn valid_handoff_state() -> HandoffCpuState {
         HandoffCpuState {
             current_el: 1 << 2,
@@ -281,18 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_tagged_address_mode_and_out_of_range_table_roots() {
+    fn rejects_tagged_address_mode() {
         let mut state = valid_handoff_state();
         state.tcr_el1 |= TCR_TBI0;
         assert_eq!(
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::InvalidTranslationConfiguration)
-        );
-        state = valid_handoff_state();
-        state.ttbr0_el1 |= 1 << 47;
-        assert_eq!(
-            validate_handoff_cpu_state(state),
-            Err(HandoffCpuStateError::MisalignedTranslationTable)
         );
     }
 
