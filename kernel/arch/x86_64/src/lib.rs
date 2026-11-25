@@ -91,7 +91,9 @@ pub unsafe fn capture_descriptor_table_state() -> DescriptorTableState {
     }
     DescriptorTableState {
         limit: u16::from_le_bytes([gdtr[0], gdtr[1]]),
-        base: u64::from_le_bytes([gdtr[2], gdtr[3], gdtr[4], gdtr[5], gdtr[6], gdtr[7], gdtr[8], gdtr[9]]),
+        base: u64::from_le_bytes([
+            gdtr[2], gdtr[3], gdtr[4], gdtr[5], gdtr[6], gdtr[7], gdtr[8], gdtr[9],
+        ]),
         cs,
         ss,
         ds,
@@ -301,16 +303,31 @@ mod tests {
             es: 0x10,
         };
         state.cs = 0;
-        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::NullCodeSelector));
+        assert_eq!(
+            validate_descriptor_table_state(state),
+            Err(DescriptorTableStateError::NullCodeSelector)
+        );
         state.cs = 0x0c;
-        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::CodeSelectorUsesLdt));
+        assert_eq!(
+            validate_descriptor_table_state(state),
+            Err(DescriptorTableStateError::CodeSelectorUsesLdt)
+        );
         state.cs = 0x0b;
-        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::CodeSelectorPrivilegeMismatch));
+        assert_eq!(
+            validate_descriptor_table_state(state),
+            Err(DescriptorTableStateError::CodeSelectorPrivilegeMismatch)
+        );
         state.cs = 0x18;
-        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::CodeDescriptorOutsideTable));
+        assert_eq!(
+            validate_descriptor_table_state(state),
+            Err(DescriptorTableStateError::CodeDescriptorOutsideTable)
+        );
         state.cs = 0x8;
         state.base = u64::MAX;
-        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::DescriptorTableAddressOverflow));
+        assert_eq!(
+            validate_descriptor_table_state(state),
+            Err(DescriptorTableStateError::DescriptorTableAddressOverflow)
+        );
     }
 
     #[test]
