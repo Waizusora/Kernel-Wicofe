@@ -36,11 +36,7 @@ pub struct KernelGdt {
 }
 
 pub const KERNEL_GDT: KernelGdt = KernelGdt {
-    entries: [
-        0,
-        0x00af_9a00_0000_ffff,
-        0x00cf_9200_0000_ffff,
-    ],
+    entries: [0, 0x00af_9a00_0000_ffff, 0x00cf_9200_0000_ffff],
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
