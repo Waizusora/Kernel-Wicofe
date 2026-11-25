@@ -260,6 +260,90 @@ pub const fn validate_handoff_cpu_state(
     Ok(())
 }
 
+
+/// Register and segment state required at the x86_64 kernel entry point.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelEntryState {
+    pub boot_info: u64,
+    pub stack_pointer: u64,
+    pub instruction_pointer: u64,
+    pub rflags: u64,
+    pub cs: u16,
+    pub ss: u16,
+    pub ds: u16,
+    pub es: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelEntryStateError {
+    NullBootInfo,
+    MisalignedBootInfo,
+    NonCanonicalBootInfo,
+    InvalidStackPointer,
+    MisalignedStackPointer,
+    NonCanonicalInstructionPointer,
+    InvalidCodeSelector,
+    InvalidDataSelector,
+    InterruptsEnabled,
+    DirectionFlagSet,
+}
+
+/// Return whether an address is canonical for four-level x86_64 paging.
+pub const fn is_canonical_48(address: u64) -> bool {
+    let upper = address >> 48;
+    let sign = (address >> 47) & 1;
+    (sign == 0 && upper == 0) || (sign == 1 && upper == 0xffff)
+}
+
+/// Validate the register and selector portion of the ABI v2 kernel entry state.
+///
+/// This does not prove that addresses are mapped or executable, that CR3 is
+/// correct, or that the GDT contains the expected descriptors.
+pub const fn validate_kernel_entry_state(
+    state: KernelEntryState,
+) -> Result<(), KernelEntryStateError> {
+    const RFLAGS_IF: u64 = 1 << 9;
+    const RFLAGS_DF: u64 = 1 << 10;
+
+    if state.boot_info == 0 {
+        return Err(KernelEntryStateError::NullBootInfo);
+    }
+    if state.boot_info % 8 != 0 {
+        return Err(KernelEntryStateError::MisalignedBootInfo);
+    }
+    if !is_canonical_48(state.boot_info) || state.boot_info >> 47 != 0 {
+        return Err(KernelEntryStateError::NonCanonicalBootInfo);
+    }
+    if state.stack_pointer == 0
+        || !is_canonical_48(state.stack_pointer)
+        || state.stack_pointer >> 47 != 0
+    {
+        return Err(KernelEntryStateError::InvalidStackPointer);
+    }
+    if state.stack_pointer % 16 != 0 {
+        return Err(KernelEntryStateError::MisalignedStackPointer);
+    }
+    if !is_canonical_48(state.instruction_pointer) || state.instruction_pointer >> 47 != 1 {
+        return Err(KernelEntryStateError::NonCanonicalInstructionPointer);
+    }
+    if state.cs != KERNEL_CODE_SELECTOR {
+        return Err(KernelEntryStateError::InvalidCodeSelector);
+    }
+    if state.ss != KERNEL_DATA_SELECTOR
+        || state.ds != KERNEL_DATA_SELECTOR
+        || state.es != KERNEL_DATA_SELECTOR
+    {
+        return Err(KernelEntryStateError::InvalidDataSelector);
+    }
+    if state.rflags & RFLAGS_IF != 0 {
+        return Err(KernelEntryStateError::InterruptsEnabled);
+    }
+    if state.rflags & RFLAGS_DF != 0 {
+        return Err(KernelEntryStateError::DirectionFlagSet);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +425,82 @@ mod tests {
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::NotRunningAtKernelPrivilege)
         );
+    }
+
+
+    fn valid_kernel_entry_state() -> KernelEntryState {
+        KernelEntryState {
+            boot_info: 0x80000,
+            stack_pointer: 0x90000,
+            instruction_pointer: 0xffff_ffff_8000_1000,
+            rflags: 0x2,
+            cs: KERNEL_CODE_SELECTOR,
+            ss: KERNEL_DATA_SELECTOR,
+            ds: KERNEL_DATA_SELECTOR,
+            es: KERNEL_DATA_SELECTOR,
+        }
+    }
+
+    #[test]
+    fn accepts_valid_kernel_entry_register_contract() {
+        assert_eq!(validate_kernel_entry_state(valid_kernel_entry_state()), Ok(()));
+    }
+
+    #[test]
+    fn rejects_invalid_boot_info_and_stack_addresses() {
+        let mut state = valid_kernel_entry_state();
+        state.boot_info = 0;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::NullBootInfo));
+        state = valid_kernel_entry_state();
+        state.boot_info += 1;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::MisalignedBootInfo));
+        state = valid_kernel_entry_state();
+        state.boot_info = 0x0000_8000_0000_0000;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::NonCanonicalBootInfo));
+        state = valid_kernel_entry_state();
+        state.stack_pointer = 0;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidStackPointer));
+        state = valid_kernel_entry_state();
+        state.stack_pointer += 8;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::MisalignedStackPointer));
+    }
+
+    #[test]
+    fn rejects_invalid_entry_address_and_selectors() {
+        let mut state = valid_kernel_entry_state();
+        state.instruction_pointer = 0x8000;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::NonCanonicalInstructionPointer));
+        state = valid_kernel_entry_state();
+        state.cs = 0x18;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidCodeSelector));
+        state = valid_kernel_entry_state();
+        state.ss = 0;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
+        state = valid_kernel_entry_state();
+        state.ds = 0;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
+        state = valid_kernel_entry_state();
+        state.es = 0;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
+    }
+
+    #[test]
+    fn rejects_enabled_interrupts_and_direction_flag_at_entry() {
+        let mut state = valid_kernel_entry_state();
+        state.rflags |= 1 << 9;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InterruptsEnabled));
+        state = valid_kernel_entry_state();
+        state.rflags |= 1 << 10;
+        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::DirectionFlagSet));
+    }
+
+    #[test]
+    fn recognizes_four_level_canonical_address_halves() {
+        assert!(is_canonical_48(0x0000_7fff_ffff_ffff));
+        assert!(!is_canonical_48(0x0000_8000_0000_0000));
+        assert!(is_canonical_48(0xffff_8000_0000_0000));
+        assert!(is_canonical_48(0xffff_ffff_ffff_ffff));
+        assert!(!is_canonical_48(0xffff_7fff_ffff_ffff));
     }
 
     #[test]

@@ -155,12 +155,20 @@ WBL enters in 64-bit long mode at CPL 0:
 - CR0.PG = 1, CR0.WP = 1, CR4.PAE = 1, and EFER.LME = 1.
 - CR3 references WBL-owned initial page tables using four-level paging.
 - Kernel image, bootstrap stack, BootInfo, and memory map are mapped.
-- Segment selectors describe flat 64-bit kernel code and data segments.
+- CS MUST equal the WBL GDT ring-0 64-bit code selector `0x08`.
+- SS, DS, and ES MUST equal the flat ring-0 data selector `0x10`.
+- RDI MUST contain the nonzero, 8-byte-aligned low-canonical virtual address of BootInfo.
+- RSP MUST be a nonzero, 16-byte-aligned low-canonical address at the top of the mapped bootstrap stack.
+- RIP MUST be the high-canonical linked kernel entry address.
 - No general-purpose register other than RDI carries ABI data.
 
 Kernel MUST establish its own GDT, IDT, and page-table policy before relying
 on firmware-created descriptor state. The initial stack is temporary and
 must be replaced during early initialization.
+
+The architecture crate exposes a pure validator for these register, selector,
+canonical-address, and alignment requirements. It does not prove mapping
+presence, executable permissions, CR3 contents, or GDT descriptor contents.
 
 ## 7. AArch64 entry state
 
