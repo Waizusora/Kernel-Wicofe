@@ -1362,7 +1362,7 @@ unsafe fn prepare_page_tables(
                         .ok_or(EFI_INVALID_PARAMETER)?;
                     let regions_start = prepared_boot_info.regions as u64;
                     let regions_size = prepared_boot_info
-                        .descriptor_capacity
+                        .region_capacity
                         .checked_mul(core::mem::size_of::<MemoryRegion>())
                         .and_then(|size| u64::try_from(size).ok())
                         .ok_or(EFI_INVALID_PARAMETER)?;
