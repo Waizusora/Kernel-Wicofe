@@ -73,8 +73,7 @@ pub fn validate_active_stack_mapping(
         })
         .ok_or(ActiveStackMappingError::NoContainingDescriptor)?;
 
-    if descriptor.memory_type != EFI_LOADER_DATA
-        && descriptor.memory_type != EFI_BOOT_SERVICES_DATA
+    if descriptor.memory_type != EFI_LOADER_DATA && descriptor.memory_type != EFI_BOOT_SERVICES_DATA
     {
         return Err(ActiveStackMappingError::UnsupportedMemoryType);
     }
