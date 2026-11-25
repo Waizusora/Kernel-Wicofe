@@ -1161,7 +1161,10 @@ mod identity_range_coalescing_tests {
 
     #[test]
     fn merges_ranges_that_share_a_page_after_rounding() {
-        let input = [range(0x1001, 0x800, MAP_READ), range(0x1800, 0x1000, MAP_READ)];
+        let input = [
+            range(0x1001, 0x800, MAP_READ),
+            range(0x1800, 0x1000, MAP_READ),
+        ];
         let mut output = [IdentityMappingRange::default(); 2];
         assert_eq!(coalesce_identity_mapping_ranges(&input, &mut output), Ok(1));
         assert_eq!(output[0], range(0x1000, 0x2000, MAP_READ));
@@ -1169,7 +1172,10 @@ mod identity_range_coalescing_tests {
 
     #[test]
     fn keeps_disjoint_and_adjacent_ranges_separate() {
-        let input = [range(0x3000, 0x1000, MAP_READ), range(0x1000, 0x1000, MAP_READ)];
+        let input = [
+            range(0x3000, 0x1000, MAP_READ),
+            range(0x1000, 0x1000, MAP_READ),
+        ];
         let mut output = [IdentityMappingRange::default(); 2];
         assert_eq!(coalesce_identity_mapping_ranges(&input, &mut output), Ok(2));
         assert_eq!(output[0], range(0x1000, 0x1000, MAP_READ));
@@ -1178,7 +1184,10 @@ mod identity_range_coalescing_tests {
 
     #[test]
     fn rejects_overlapping_ranges_with_different_permissions() {
-        let input = [range(0x1000, 0x2000, MAP_READ), range(0x2000, 0x1000, MAP_READ | MAP_WRITE)];
+        let input = [
+            range(0x1000, 0x2000, MAP_READ),
+            range(0x2000, 0x1000, MAP_READ | MAP_WRITE),
+        ];
         let mut output = [IdentityMappingRange::default(); 2];
         assert_eq!(
             coalesce_identity_mapping_ranges(&input, &mut output),
@@ -1198,12 +1207,18 @@ mod identity_range_coalescing_tests {
             Err(IdentityMappingError::UnsupportedPermissions)
         );
         assert_eq!(
-            coalesce_identity_mapping_ranges(&[range(u64::MAX - 0x7ff, 0x1000, MAP_READ)], &mut output),
+            coalesce_identity_mapping_ranges(
+                &[range(u64::MAX - 0x7ff, 0x1000, MAP_READ)],
+                &mut output
+            ),
             Err(IdentityMappingError::AddressOverflow)
         );
         assert_eq!(
             coalesce_identity_mapping_ranges(
-                &[range(0x1000, 0x1000, MAP_READ), range(0x3000, 0x1000, MAP_READ)],
+                &[
+                    range(0x1000, 0x1000, MAP_READ),
+                    range(0x3000, 0x1000, MAP_READ)
+                ],
                 &mut output
             ),
             Err(IdentityMappingError::OutputTooSmall)
