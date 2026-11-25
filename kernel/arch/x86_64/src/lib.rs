@@ -20,6 +20,85 @@ pub struct HandoffCpuState {
     pub cs: u16,
 }
 
+/// Snapshot of the active x86_64 global descriptor table and segment selectors.
+///
+/// This records descriptor-table metadata only; it does not prove that the
+/// referenced descriptors have the required type, privilege, or flags.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DescriptorTableState {
+    pub base: u64,
+    pub limit: u16,
+    pub cs: u16,
+    pub ss: u16,
+    pub ds: u16,
+    pub es: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DescriptorTableStateError {
+    NullCodeSelector,
+    CodeSelectorUsesLdt,
+    CodeSelectorPrivilegeMismatch,
+    CodeDescriptorOutsideTable,
+    DescriptorTableAddressOverflow,
+}
+
+/// Check that the current CS selector names an in-bounds GDT descriptor.
+///
+/// This is deliberately not a descriptor-content validator. WBL must install
+/// its own known GDT before handoff rather than relying on firmware descriptors.
+pub const fn validate_descriptor_table_state(
+    state: DescriptorTableState,
+) -> Result<(), DescriptorTableStateError> {
+    if state.base.checked_add(u64::from(state.limit)).is_none() {
+        return Err(DescriptorTableStateError::DescriptorTableAddressOverflow);
+    }
+    if state.cs & !0b11 == 0 {
+        return Err(DescriptorTableStateError::NullCodeSelector);
+    }
+    if state.cs & (1 << 2) != 0 {
+        return Err(DescriptorTableStateError::CodeSelectorUsesLdt);
+    }
+    if state.cs & 0b11 != 0 {
+        return Err(DescriptorTableStateError::CodeSelectorPrivilegeMismatch);
+    }
+    let descriptor_end = u32::from(state.cs & !0b111) + 7;
+    if descriptor_end > u32::from(state.limit) {
+        return Err(DescriptorTableStateError::CodeDescriptorOutsideTable);
+    }
+    Ok(())
+}
+
+/// Capture GDTR and the active code/data selectors without modifying them.
+///
+/// # Safety
+///
+/// The caller must execute in privileged x86_64 mode.
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn capture_descriptor_table_state() -> DescriptorTableState {
+    let mut gdtr = [0u8; 10];
+    let cs: u16;
+    let ss: u16;
+    let ds: u16;
+    let es: u16;
+    // SAFETY: SGDT and segment-register moves are read-only privileged-state queries.
+    unsafe {
+        core::arch::asm!("sgdt [{}]", in(reg) gdtr.as_mut_ptr(), options(nostack, preserves_flags));
+        core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov {0:x}, ss", out(reg) ss, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov {0:x}, ds", out(reg) ds, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov {0:x}, es", out(reg) es, options(nomem, nostack, preserves_flags));
+    }
+    DescriptorTableState {
+        limit: u16::from_le_bytes([gdtr[0], gdtr[1]]),
+        base: u64::from_le_bytes([gdtr[2], gdtr[3], gdtr[4], gdtr[5], gdtr[6], gdtr[7], gdtr[8], gdtr[9]]),
+        cs,
+        ss,
+        ds,
+        es,
+    }
+}
+
 /// Capture the current privileged CPU state without changing it.
 ///
 /// # Safety
@@ -196,6 +275,42 @@ mod tests {
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::NotRunningAtKernelPrivilege)
         );
+    }
+
+    #[test]
+    fn accepts_code_selector_within_gdt_bounds() {
+        let state = DescriptorTableState {
+            base: 0x1000,
+            limit: 0x17,
+            cs: 0x8,
+            ss: 0x10,
+            ds: 0x10,
+            es: 0x10,
+        };
+        assert_eq!(validate_descriptor_table_state(state), Ok(()));
+    }
+
+    #[test]
+    fn rejects_invalid_code_selector_and_gdt_bounds() {
+        let mut state = DescriptorTableState {
+            base: 0x1000,
+            limit: 0x17,
+            cs: 0x8,
+            ss: 0x10,
+            ds: 0x10,
+            es: 0x10,
+        };
+        state.cs = 0;
+        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::NullCodeSelector));
+        state.cs = 0x0c;
+        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::CodeSelectorUsesLdt));
+        state.cs = 0x0b;
+        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::CodeSelectorPrivilegeMismatch));
+        state.cs = 0x18;
+        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::CodeDescriptorOutsideTable));
+        state.cs = 0x8;
+        state.base = u64::MAX;
+        assert_eq!(validate_descriptor_table_state(state), Err(DescriptorTableStateError::DescriptorTableAddressOverflow));
     }
 
     #[test]
