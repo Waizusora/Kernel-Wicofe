@@ -99,8 +99,10 @@ pub const fn validate_handoff_cpu_state(
     const DAIF_MASK: u64 = 0b1111 << 6;
     const SCTLR_M: u64 = 1;
     const TCR_T0SZ_MASK: u64 = 0b11_1111;
+    const TCR_EPD0: u64 = 1 << 7;
     const TCR_TG0_MASK: u64 = 0b11 << 14;
     const TCR_T1SZ_MASK: u64 = 0b11_1111 << 16;
+    const TCR_EPD1: u64 = 1 << 23;
     const TCR_TG1_MASK: u64 = 0b11 << 30;
     const TCR_TG1_4K: u64 = 0b10 << 30;
     const TTBR_ADDRESS_ALIGNMENT_MASK: u64 = 0xfff;
@@ -118,8 +120,10 @@ pub const fn validate_handoff_cpu_state(
         return Err(HandoffCpuStateError::TranslationDisabled);
     }
     if state.tcr_el1 & TCR_T0SZ_MASK != 16
+        || state.tcr_el1 & TCR_EPD0 != 0
         || state.tcr_el1 & TCR_TG0_MASK != 0
         || (state.tcr_el1 & TCR_T1SZ_MASK) >> 16 != 16
+        || state.tcr_el1 & TCR_EPD1 != 0
         || state.tcr_el1 & TCR_TG1_MASK != TCR_TG1_4K
     {
         return Err(HandoffCpuStateError::InvalidTranslationConfiguration);
@@ -186,6 +190,22 @@ mod tests {
         assert_eq!(
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::TranslationDisabled)
+        );
+    }
+
+    #[test]
+    fn rejects_disabled_translation_for_either_ttbr() {
+        let mut state = valid_handoff_state();
+        state.tcr_el1 |= 1 << 7;
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::InvalidTranslationConfiguration)
+        );
+        state = valid_handoff_state();
+        state.tcr_el1 |= 1 << 23;
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::InvalidTranslationConfiguration)
         );
     }
 
