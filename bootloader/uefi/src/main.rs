@@ -301,8 +301,10 @@ unsafe fn prepare_boot_info(
         let raw_map = unsafe { allocate_pool(services, capacity)? };
         // Seven independent reservations can each split one canonical region
         // into at most three pieces, requiring up to fourteen extra entries.
+        // Eight independent x86_64 reservations can each split one canonical
+        // region into at most three pieces, requiring up to sixteen extra entries.
         let region_capacity = descriptor_capacity
-            .checked_add(14)
+            .checked_add(16)
             .ok_or(EFI_INVALID_PARAMETER)?;
         let descriptors = match unsafe {
             allocate_array::<UefiMemoryDescriptor>(services, descriptor_capacity)
@@ -604,12 +606,18 @@ unsafe fn refresh_prepared_boot_info(
             length: u64::try_from(prepared.raw_map_capacity).map_err(|_| EFI_INVALID_PARAMETER)?,
             kind: memory_kind::BOOT_INFO,
         },
+        #[cfg(target_arch = "x86_64")]
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: tables.gdt_physical_address,
+            length: UEFI_PAGE_SIZE,
+            kind: memory_kind::BOOT_INFO,
+        },
     ];
     let mut normalized_reservations = [wicofe_bootloader_uefi::MemoryReservation {
         physical_start: 0,
         length: 0,
         kind: memory_kind::BOOT_INFO,
-    }; 7];
+    }; if cfg!(target_arch = "x86_64") { 8 } else { 7 }];
     let normalized_count =
         coalesce_memory_reservations(&reservations, &mut normalized_reservations)
             .map_err(|_| EFI_INVALID_PARAMETER)?;
@@ -1000,6 +1008,8 @@ struct PreparedPageTables {
     bootstrap_stack_allocation_base: u64,
     table_pool_pages: usize,
     active_stack_mapping: IdentityMappingRange,
+    #[cfg(target_arch = "x86_64")]
+    gdt_physical_address: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1083,6 +1093,44 @@ unsafe fn allocate_array<T>(services: &BootServices, count: usize) -> Result<*mu
         return Err(EFI_INVALID_PARAMETER);
     }
     Ok(buffer.cast())
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn allocate_kernel_gdt(services: &BootServices) -> Result<u64, Status> {
+    let allocate = services.allocate_pages.ok_or(EFI_INVALID_PARAMETER)?;
+    let release = services.free_pages.ok_or(EFI_INVALID_PARAMETER)?;
+    let mut base = 0_u64;
+    // Allocate one dedicated page so the GDT can be mapped read-only later.
+    // SAFETY: AllocatePages receives a checked one-page request and valid output pointer.
+    let status = unsafe { allocate(0, EFI_LOADER_DATA, 1, &mut base) };
+    if is_error(status) {
+        return Err(status);
+    }
+    if base == 0 || base % UEFI_PAGE_SIZE != 0 || usize::try_from(base).is_err() {
+        // SAFETY: release the page returned by firmware.
+        let _ = unsafe { release(base, 1) };
+        return Err(EFI_INVALID_PARAMETER);
+    }
+    let pointer = base as usize as *mut u8;
+    // SAFETY: this is a dedicated writable page allocated by WBL.
+    unsafe { core::ptr::write_bytes(pointer, 0, UEFI_PAGE_SIZE as usize) };
+    // SAFETY: the page is aligned and large enough for the 24-byte GDT.
+    unsafe {
+        pointer
+            .cast::<wicofe_kernel_x86_64::KernelGdt>()
+            .write(wicofe_kernel_x86_64::KERNEL_GDT);
+    }
+    if wicofe_kernel_x86_64::validate_kernel_gdt(unsafe {
+        &*pointer.cast::<wicofe_kernel_x86_64::KernelGdt>()
+    })
+    .is_err()
+        || wicofe_kernel_x86_64::kernel_gdt_pointer(base).is_none()
+    {
+        // SAFETY: release the page if the static descriptor template fails validation.
+        let _ = unsafe { release(base, 1) };
+        return Err(EFI_INVALID_PARAMETER);
+    }
+    Ok(base)
 }
 
 unsafe fn allocate_page_table_pool(
@@ -1190,6 +1238,7 @@ unsafe fn build_architecture_page_tables(
                     bootstrap_stack_allocation_base: 0,
                     table_pool_pages: table_count,
                     active_stack_mapping: IdentityMappingRange::default(),
+                    gdt_physical_address: 0,
                 })
             })();
             // SAFETY: addresses was allocated above.
@@ -1331,6 +1380,21 @@ unsafe fn prepare_page_tables(
             return Err(status);
         }
     };
+    #[cfg(target_arch = "x86_64")]
+    let gdt_physical_address = match unsafe { allocate_kernel_gdt(services) } {
+        Ok(address) => address,
+        Err(status) => {
+            unsafe {
+                free_pages(
+                    services,
+                    bootstrap_stack.allocation_base,
+                    bootstrap_stack.allocation_pages,
+                )
+            };
+            unsafe { free_pool(services, segments.cast()) };
+            return Err(status);
+        }
+    };
     let result = (|| {
         let mut segment_count = 0usize;
         for index in 0..parsed.program_header_count() {
@@ -1378,7 +1442,7 @@ unsafe fn prepare_page_tables(
                     unsafe { core::slice::from_raw_parts(pe_mappings, pe_mapping_count) };
 
                 let identity_capacity = pe_mapping_count
-                    .checked_add(4)
+                    .checked_add(if cfg!(target_arch = "x86_64") { 5 } else { 4 })
                     .ok_or(EFI_INVALID_PARAMETER)?;
                 let identity_ranges =
                     unsafe { allocate_array::<IdentityMappingRange>(services, identity_capacity)? };
@@ -1432,7 +1496,16 @@ unsafe fn prepare_page_tables(
                         length: BOOTSTRAP_STACK_LAYOUT.stack_size,
                         permissions: MAP_READ | MAP_WRITE,
                     };
-                    let identity_count = metadata_end + 2;
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        ranges[metadata_end + 2] = IdentityMappingRange {
+                            physical_start: gdt_physical_address,
+                            length: UEFI_PAGE_SIZE,
+                            permissions: MAP_READ,
+                        };
+                    }
+                    let identity_count =
+                        metadata_end + if cfg!(target_arch = "x86_64") { 3 } else { 2 };
 
                     let combined_capacity = kernel_mapping_count
                         .checked_add(identity_capacity)
@@ -1480,10 +1553,14 @@ unsafe fn prepare_page_tables(
             tables.bootstrap_stack_pages = bootstrap_stack.allocation_pages;
             tables.bootstrap_stack_allocation_base = bootstrap_stack.allocation_base;
             tables.active_stack_mapping = active_stack;
+            #[cfg(target_arch = "x86_64")]
+            {
+                tables.gdt_physical_address = gdt_physical_address;
+            }
             Ok(tables)
         }
         Err(status) => {
-            // SAFETY: release the complete stack allocation after page-table preparation failed.
+            // SAFETY: release stack and GDT allocations after page-table preparation failed.
             unsafe {
                 free_pages(
                     services,
@@ -1491,6 +1568,8 @@ unsafe fn prepare_page_tables(
                     bootstrap_stack.allocation_pages,
                 )
             };
+            #[cfg(target_arch = "x86_64")]
+            unsafe { free_pages(services, gdt_physical_address, 1) };
             Err(status)
         }
     }

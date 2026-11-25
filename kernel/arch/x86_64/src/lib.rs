@@ -60,6 +60,25 @@ pub const fn validate_kernel_gdt(gdt: &KernelGdt) -> Result<(), KernelGdtError> 
     Ok(())
 }
 
+/// Packed operand format consumed by LGDT in 64-bit mode.
+#[repr(C, packed)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct DescriptorTablePointer {
+    pub limit: u16,
+    pub base: u64,
+}
+
+/// Construct the LGDT operand for a mapped, aligned WBL-owned GDT.
+pub const fn kernel_gdt_pointer(base: u64) -> Option<DescriptorTablePointer> {
+    if base == 0 || base % 8 != 0 {
+        return None;
+    }
+    Some(DescriptorTablePointer {
+        limit: (core::mem::size_of::<KernelGdt>() - 1) as u16,
+        base,
+    })
+}
+
 /// Snapshot of the active x86_64 global descriptor table and segment selectors.
 ///
 /// This records descriptor-table metadata only; it does not prove that the
@@ -317,6 +336,18 @@ mod tests {
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::NotRunningAtKernelPrivilege)
         );
+    }
+
+    #[test]
+    fn kernel_gdt_pointer_uses_exact_table_limit_and_base() {
+        let pointer = kernel_gdt_pointer(0x20_0000).unwrap();
+        // Packed fields may be unaligned; read them without creating references.
+        let limit = unsafe { core::ptr::addr_of!(pointer.limit).read_unaligned() };
+        let base = unsafe { core::ptr::addr_of!(pointer.base).read_unaligned() };
+        assert_eq!(limit, 23);
+        assert_eq!(base, 0x20_0000);
+        assert_eq!(kernel_gdt_pointer(0), None);
+        assert_eq!(kernel_gdt_pointer(0x20_0001), None);
     }
 
     #[test]
