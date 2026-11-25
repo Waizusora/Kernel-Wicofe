@@ -99,13 +99,27 @@ pub const fn validate_handoff_cpu_state(
     const DAIF_MASK: u64 = 0b1111 << 6;
     const SCTLR_M: u64 = 1;
     const TCR_T0SZ_MASK: u64 = 0b11_1111;
-    const TCR_EPD0: u64 = 1 << 7;
+    const TCR_IRGN0_MASK: u64 = 0b11 << 8;
+    const TCR_ORGN0_MASK: u64 = 0b11 << 10;
+    const TCR_SH0_MASK: u64 = 0b11 << 12;
     const TCR_TG0_MASK: u64 = 0b11 << 14;
+    const TCR_EPD0: u64 = 1 << 7;
     const TCR_T1SZ_MASK: u64 = 0b11_1111 << 16;
-    const TCR_EPD1: u64 = 1 << 23;
+    const TCR_IRGN1_MASK: u64 = 0b11 << 24;
+    const TCR_ORGN1_MASK: u64 = 0b11 << 26;
+    const TCR_SH1_MASK: u64 = 0b11 << 28;
     const TCR_TG1_MASK: u64 = 0b11 << 30;
+    const TCR_EPD1: u64 = 1 << 23;
     const TCR_TG1_4K: u64 = 0b10 << 30;
+    const TCR_WBWA: u64 = 0b01;
+    const TCR_INNER_SHAREABLE: u64 = 0b11;
+    const TCR_IPS_MASK: u64 = 0b111 << 32;
+    const TCR_IPS_48BIT: u64 = 0b101 << 32;
+    const TCR_TBI0: u64 = 1 << 37;
+    const TCR_TBI1: u64 = 1 << 38;
+    const TCR_DS: u64 = 1 << 59;
     const TTBR_ADDRESS_ALIGNMENT_MASK: u64 = 0xfff;
+    const TTBR_ADDRESS_MASK: u64 = 0x0000_ffff_ffff_f000;
 
     if state.current_el & CURRENT_EL_MASK != CURRENT_EL1 {
         return Err(HandoffCpuStateError::UnsupportedExceptionLevel);
@@ -125,6 +139,14 @@ pub const fn validate_handoff_cpu_state(
         || (state.tcr_el1 & TCR_T1SZ_MASK) >> 16 != 16
         || state.tcr_el1 & TCR_EPD1 != 0
         || state.tcr_el1 & TCR_TG1_MASK != TCR_TG1_4K
+        || (state.tcr_el1 & TCR_IRGN0_MASK) >> 8 != TCR_WBWA
+        || (state.tcr_el1 & TCR_ORGN0_MASK) >> 10 != TCR_WBWA
+        || (state.tcr_el1 & TCR_SH0_MASK) >> 12 != TCR_INNER_SHAREABLE
+        || (state.tcr_el1 & TCR_IRGN1_MASK) >> 24 != TCR_WBWA
+        || (state.tcr_el1 & TCR_ORGN1_MASK) >> 26 != TCR_WBWA
+        || (state.tcr_el1 & TCR_SH1_MASK) >> 28 != TCR_INNER_SHAREABLE
+        || state.tcr_el1 & TCR_IPS_MASK < TCR_IPS_48BIT
+        || state.tcr_el1 & (TCR_TBI0 | TCR_TBI1 | TCR_DS) != 0
     {
         return Err(HandoffCpuStateError::InvalidTranslationConfiguration);
     }
@@ -133,6 +155,8 @@ pub const fn validate_handoff_cpu_state(
     }
     if state.ttbr0_el1 & TTBR_ADDRESS_ALIGNMENT_MASK != 0
         || state.ttbr1_el1 & TTBR_ADDRESS_ALIGNMENT_MASK != 0
+        || state.ttbr0_el1 & !(TTBR_ADDRESS_MASK | (0xffff << 48)) != 0
+        || state.ttbr1_el1 & !(TTBR_ADDRESS_MASK | (0xffff << 48)) != 0
     {
         return Err(HandoffCpuStateError::MisalignedTranslationTable);
     }
@@ -149,7 +173,16 @@ mod tests {
             aarch64_state: true,
             daif: 0b1111 << 6,
             sctlr_el1: 1,
-            tcr_el1: 16 | (16 << 16) | (0b10 << 30),
+            tcr_el1: 16
+                | (TCR_WBWA << 8)
+                | (TCR_WBWA << 10)
+                | (TCR_INNER_SHAREABLE << 12)
+                | (16 << 16)
+                | (TCR_WBWA << 24)
+                | (TCR_WBWA << 26)
+                | (TCR_INNER_SHAREABLE << 28)
+                | (0b10 << 30)
+                | TCR_IPS_48BIT,
             mair_el1: 0xff,
             ttbr0_el1: 0x1000,
             ttbr1_el1: 0x2000,
@@ -222,6 +255,44 @@ mod tests {
         assert_eq!(
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::InvalidMemoryAttributes)
+        );
+    }
+
+    #[test]
+    fn rejects_incompatible_walk_attributes_and_physical_address_size() {
+        let mut state = valid_handoff_state();
+        state.tcr_el1 &= !(0b11 << 8);
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::InvalidTranslationConfiguration)
+        );
+        state = valid_handoff_state();
+        state.tcr_el1 = (state.tcr_el1 & !TCR_IPS_MASK) | (0b100 << 32);
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::InvalidTranslationConfiguration)
+        );
+        state = valid_handoff_state();
+        state.tcr_el1 |= TCR_DS;
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::InvalidTranslationConfiguration)
+        );
+    }
+
+    #[test]
+    fn rejects_tagged_address_mode_and_out_of_range_table_roots() {
+        let mut state = valid_handoff_state();
+        state.tcr_el1 |= TCR_TBI0;
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::InvalidTranslationConfiguration)
+        );
+        state = valid_handoff_state();
+        state.ttbr0_el1 |= 1 << 47;
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::MisalignedTranslationTable)
         );
     }
 
