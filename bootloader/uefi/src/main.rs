@@ -634,6 +634,41 @@ unsafe fn refresh_prepared_boot_info(
 }
 
 #[cfg(target_arch = "x86_64")]
+#[cfg(target_arch = "x86_64")]
+fn preflight_firmware_cpu_state() -> Result<(), Status> {
+    // Capture the live firmware state, but do not apply the kernel-entry
+    // validator: UEFI may legitimately enter with interrupts enabled.
+    // SAFETY: UEFI x86_64 executes this image at CPL 0.
+    let state = unsafe { wicofe_kernel_x86_64::capture_handoff_cpu_state() };
+    const CR0_PG: u64 = 1 << 31;
+    const CR4_PAE: u64 = 1 << 5;
+    const EFER_LMA: u64 = 1 << 10;
+
+    if state.cr0 & CR0_PG == 0
+        || state.cr4 & CR4_PAE == 0
+        || state.efer & EFER_LMA == 0
+        || state.cs & 0b11 != 0
+    {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "aarch64")]
+fn preflight_firmware_cpu_state() -> Result<(), Status> {
+    // The current WBL can only proceed from EL1. EL2 -> EL1 transition
+    // support must be implemented explicitly before accepting EL2 firmware.
+    // SAFETY: UEFI supplies privileged AArch64 execution.
+    let state = unsafe { wicofe_kernel_aarch64::capture_handoff_cpu_state() }
+        .map_err(|_| EFI_INVALID_PARAMETER)?;
+    if state.current_el != (1 << 2) || !state.aarch64_state {
+        return Err(EFI_INVALID_PARAMETER);
+    }
+    // Do not run the kernel-entry validator here: firmware DAIF, MMU and
+    // translation settings are not yet the final ABI v2 entry state.
+    Ok(())
+}
+
 fn current_stack_pointer() -> u64 {
     let stack_pointer: u64;
     // SAFETY: reading RSP does not modify machine state.
@@ -1630,6 +1665,10 @@ pub extern "efiapi" fn efi_main(image_handle: Handle, system_table: *mut SystemT
                 tables.bootstrap_stack_top,
                 tables.bootstrap_stack_pages,
             );
+            if let Err(status) = preflight_firmware_cpu_state() {
+                let _ = print_message(system_table, ERROR_MESSAGE);
+                return status;
+            }
             let console_status = print_message(system_table, LOADED_MESSAGE);
             // SAFETY: all storage is retained; this refresh performs no allocation.
             if let Err(status) =
