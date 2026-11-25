@@ -1070,7 +1070,7 @@ mod tests {
 mod memory_map;
 pub use memory_map::{
     ActiveStackMappingError, DescriptorDecodeError, MemoryMapError, MemoryReservation,
-    ReservationError, UefiMemoryDescriptor, apply_memory_reservations,
+    ReservationError, UefiMemoryDescriptor, apply_memory_reservations, coalesce_memory_reservations,
     apply_memory_reservations_in_place, decode_uefi_memory_descriptors, translate_uefi_memory_map,
     validate_active_stack_mapping,
 };

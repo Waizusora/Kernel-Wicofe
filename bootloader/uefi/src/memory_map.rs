@@ -216,6 +216,90 @@ pub enum ReservationError {
     OutputTooSmall,
 }
 
+/// Page-round, sort, and merge reservation ranges without allocating scratch memory.
+///
+/// Overlapping or adjacent ranges of the same kind are coalesced. Overlap between
+/// different kinds is rejected because it would make ownership ambiguous.
+pub fn coalesce_memory_reservations(
+    input: &[MemoryReservation],
+    output: &mut [MemoryReservation],
+) -> Result<usize, ReservationError> {
+    if input.len() > output.len() {
+        return Err(ReservationError::OutputTooSmall);
+    }
+
+    for (index, reservation) in input.iter().enumerate() {
+        if reservation.length == 0 {
+            return Err(ReservationError::InvalidRange);
+        }
+        if reservation.kind != memory_kind::KERNEL && reservation.kind != memory_kind::BOOT_INFO {
+            return Err(ReservationError::UnsupportedKind);
+        }
+        let end = reservation
+            .physical_start
+            .checked_add(reservation.length)
+            .ok_or(ReservationError::AddressOverflow)?;
+        let page_start = reservation.physical_start & !(EFI_PAGE_SIZE - 1);
+        let page_end = end
+            .checked_add(EFI_PAGE_SIZE - 1)
+            .ok_or(ReservationError::AddressOverflow)?
+            & !(EFI_PAGE_SIZE - 1);
+        if page_end <= page_start {
+            return Err(ReservationError::InvalidRange);
+        }
+        output[index] = MemoryReservation {
+            physical_start: page_start,
+            length: page_end - page_start,
+            kind: reservation.kind,
+        };
+    }
+
+    for index in 1..input.len() {
+        let mut cursor = index;
+        while cursor != 0
+            && output[cursor].physical_start < output[cursor - 1].physical_start
+        {
+            output.swap(cursor, cursor - 1);
+            cursor -= 1;
+        }
+    }
+
+    let mut merged_count = 0usize;
+    for index in 0..input.len() {
+        let current = output[index];
+        if merged_count != 0 {
+            let previous = output[merged_count - 1];
+            let previous_end = previous
+                .physical_start
+                .checked_add(previous.length)
+                .ok_or(ReservationError::AddressOverflow)?;
+            if current.physical_start < previous_end {
+                if current.kind != previous.kind {
+                    return Err(ReservationError::UnsortedOrOverlappingReservations);
+                }
+                let current_end = current
+                    .physical_start
+                    .checked_add(current.length)
+                    .ok_or(ReservationError::AddressOverflow)?;
+                output[merged_count - 1].length =
+                    previous.length.max(current_end - previous.physical_start);
+                continue;
+            }
+            if current.physical_start == previous_end && current.kind == previous.kind {
+                output[merged_count - 1].length = previous
+                    .length
+                    .checked_add(current.length)
+                    .ok_or(ReservationError::AddressOverflow)?;
+                continue;
+            }
+        }
+        output[merged_count] = current;
+        merged_count += 1;
+    }
+
+    Ok(merged_count)
+}
+
 fn push_region(
     output: &mut [MemoryRegion],
     count: &mut usize,
@@ -1190,6 +1274,87 @@ mod active_stack_mapping_tests {
         assert_eq!(
             validate_active_stack_mapping(&descriptors, 0x60_0000, 2 * EFI_PAGE_SIZE, 0x60_1000),
             Err(ActiveStackMappingError::UnsupportedMemoryType)
+        );
+    }
+}
+
+#[cfg(test)]
+mod reservation_coalescing_tests {
+    use super::*;
+
+    fn reservation(start: u64, length: u64, kind: u32) -> MemoryReservation {
+        MemoryReservation {
+            physical_start: start,
+            length,
+            kind,
+        }
+    }
+
+    #[test]
+    fn rounds_sorts_and_merges_overlapping_pool_allocations() {
+        let input = [
+            reservation(0x5001, 0x800, memory_kind::BOOT_INFO),
+            reservation(0x4000, 0x1000, memory_kind::KERNEL),
+            reservation(0x5800, 0x1000, memory_kind::BOOT_INFO),
+        ];
+        let mut output = [reservation(0, 0, 0); 3];
+        assert_eq!(coalesce_memory_reservations(&input, &mut output), Ok(2));
+        assert_eq!(output[0], reservation(0x4000, 0x1000, memory_kind::KERNEL));
+        assert_eq!(output[1], reservation(0x5000, 0x2000, memory_kind::BOOT_INFO));
+    }
+
+    #[test]
+    fn merges_adjacent_same_kind_but_keeps_different_kinds_separate() {
+        let input = [
+            reservation(0x2000, 0x1000, memory_kind::BOOT_INFO),
+            reservation(0x1000, 0x1000, memory_kind::BOOT_INFO),
+            reservation(0x3000, 0x1000, memory_kind::KERNEL),
+        ];
+        let mut output = [reservation(0, 0, 0); 3];
+        assert_eq!(coalesce_memory_reservations(&input, &mut output), Ok(2));
+        assert_eq!(output[0], reservation(0x1000, 0x2000, memory_kind::BOOT_INFO));
+        assert_eq!(output[1], reservation(0x3000, 0x1000, memory_kind::KERNEL));
+    }
+
+    #[test]
+    fn rejects_overlapping_different_ownership_kinds() {
+        let input = [
+            reservation(0x1000, 0x2000, memory_kind::KERNEL),
+            reservation(0x2000, 0x1000, memory_kind::BOOT_INFO),
+        ];
+        let mut output = [reservation(0, 0, 0); 2];
+        assert_eq!(
+            coalesce_memory_reservations(&input, &mut output),
+            Err(ReservationError::UnsortedOrOverlappingReservations)
+        );
+    }
+
+    #[test]
+    fn rejects_zero_length_overflow_and_small_output() {
+        let mut output = [reservation(0, 0, 0); 1];
+        assert_eq!(
+            coalesce_memory_reservations(
+                &[reservation(0x1000, 0, memory_kind::BOOT_INFO)],
+                &mut output
+            ),
+            Err(ReservationError::InvalidRange)
+        );
+        assert_eq!(
+            coalesce_memory_reservations(
+                &[reservation(u64::MAX - 0x7ff, 0x1000, memory_kind::BOOT_INFO)],
+                &mut output
+            ),
+            Err(ReservationError::AddressOverflow)
+        );
+        assert_eq!(
+            coalesce_memory_reservations(
+                &[
+                    reservation(0x1000, 0x1000, memory_kind::KERNEL),
+                    reservation(0x3000, 0x1000, memory_kind::BOOT_INFO),
+                ],
+                &mut output
+            ),
+            Err(ReservationError::OutputTooSmall)
         );
     }
 }

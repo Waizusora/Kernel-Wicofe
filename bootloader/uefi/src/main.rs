@@ -21,7 +21,7 @@ use wicofe_bootloader_uefi::{
     MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
     kernel_allocation_layout, page_table_allocation_layout, page_table_pool_capacity,
     plan_combined_page_mappings, plan_kernel_page_mappings, plan_pe_identity_mappings,
-    translate_uefi_memory_map, validate_active_stack_mapping,
+    coalesce_memory_reservations, translate_uefi_memory_map, validate_active_stack_mapping,
 };
 
 type Status = usize;
@@ -298,8 +298,10 @@ unsafe fn prepare_boot_info(
             .ok_or(EFI_INVALID_PARAMETER)?
             / descriptor_size;
         let raw_map = unsafe { allocate_pool(services, capacity)? };
+        // Seven independent reservations can each split one canonical region
+        // into at most three pieces, requiring up to fourteen extra entries.
         let region_capacity = descriptor_capacity
-            .checked_add(8)
+            .checked_add(14)
             .ok_or(EFI_INVALID_PARAMETER)?;
         let descriptors = match unsafe {
             allocate_array::<UefiMemoryDescriptor>(services, descriptor_capacity)
@@ -548,45 +550,16 @@ unsafe fn refresh_prepared_boot_info(
         .filter(|count| *count != 0)
         .ok_or(EFI_INVALID_PARAMETER)?;
 
-    let info_start = prepared.info as u64;
-    let info_end = info_start
-        .checked_add(core::mem::size_of::<BootInfo>() as u64)
-        .ok_or(EFI_INVALID_PARAMETER)?;
-    let regions_start = prepared.regions as u64;
     let regions_size = prepared
         .region_capacity
         .checked_mul(core::mem::size_of::<MemoryRegion>())
         .and_then(|size| u64::try_from(size).ok())
         .ok_or(EFI_INVALID_PARAMETER)?;
-    let regions_end = regions_start
-        .checked_add(regions_size)
-        .ok_or(EFI_INVALID_PARAMETER)?;
-    let descriptors_start = prepared.descriptors as u64;
     let descriptors_size = prepared
         .descriptor_capacity
         .checked_mul(core::mem::size_of::<UefiMemoryDescriptor>())
         .and_then(|size| u64::try_from(size).ok())
         .ok_or(EFI_INVALID_PARAMETER)?;
-    let descriptors_end = descriptors_start
-        .checked_add(descriptors_size)
-        .ok_or(EFI_INVALID_PARAMETER)?;
-    let raw_map_start = prepared.raw_map as u64;
-    let raw_map_end = raw_map_start
-        .checked_add(u64::try_from(prepared.raw_map_capacity).map_err(|_| EFI_INVALID_PARAMETER)?)
-        .ok_or(EFI_INVALID_PARAMETER)?;
-    let metadata_start = info_start
-        .min(regions_start)
-        .min(descriptors_start)
-        .min(raw_map_start)
-        & !(UEFI_PAGE_SIZE - 1);
-    let metadata_end = info_end
-        .max(regions_end)
-        .max(descriptors_end)
-        .max(raw_map_end)
-        .checked_add(UEFI_PAGE_SIZE - 1)
-        .ok_or(EFI_INVALID_PARAMETER)?
-        & !(UEFI_PAGE_SIZE - 1);
-
     let stack_length = u64::try_from(tables.bootstrap_stack_pages)
         .ok()
         .and_then(|pages| pages.checked_mul(UEFI_PAGE_SIZE))
@@ -595,7 +568,10 @@ unsafe fn refresh_prepared_boot_info(
         .ok()
         .and_then(|pages| pages.checked_mul(UEFI_PAGE_SIZE))
         .ok_or(EFI_INVALID_PARAMETER)?;
-    let mut reservations = [
+
+    // Keep each retained allocation reserved independently. Pool allocations
+    // can be far apart; reserving their min/max span would claim unrelated pages.
+    let reservations = [
         prepared.kernel_reservation,
         wicofe_bootloader_uefi::MemoryReservation {
             physical_start: tables.root_physical_address,
@@ -608,26 +584,37 @@ unsafe fn refresh_prepared_boot_info(
             kind: memory_kind::BOOT_INFO,
         },
         wicofe_bootloader_uefi::MemoryReservation {
-            physical_start: metadata_start,
-            length: metadata_end
-                .checked_sub(metadata_start)
-                .ok_or(EFI_INVALID_PARAMETER)?,
+            physical_start: prepared.info as u64,
+            length: core::mem::size_of::<BootInfo>() as u64,
+            kind: memory_kind::BOOT_INFO,
+        },
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: prepared.regions as u64,
+            length: regions_size,
+            kind: memory_kind::BOOT_INFO,
+        },
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: prepared.descriptors as u64,
+            length: descriptors_size,
+            kind: memory_kind::BOOT_INFO,
+        },
+        wicofe_bootloader_uefi::MemoryReservation {
+            physical_start: prepared.raw_map as u64,
+            length: u64::try_from(prepared.raw_map_capacity).map_err(|_| EFI_INVALID_PARAMETER)?,
             kind: memory_kind::BOOT_INFO,
         },
     ];
-    for index in 1..reservations.len() {
-        let mut cursor = index;
-        while cursor != 0
-            && reservations[cursor].physical_start < reservations[cursor - 1].physical_start
-        {
-            reservations.swap(cursor, cursor - 1);
-            cursor -= 1;
-        }
-    }
+    let mut normalized_reservations = [wicofe_bootloader_uefi::MemoryReservation {
+        physical_start: 0,
+        length: 0,
+        kind: memory_kind::BOOT_INFO,
+    }; 7];
+    let normalized_count = coalesce_memory_reservations(&reservations, &mut normalized_reservations)
+        .map_err(|_| EFI_INVALID_PARAMETER)?;
     let region_count = wicofe_bootloader_uefi::apply_memory_reservations_in_place(
         region_output,
         translated_count,
-        &reservations,
+        &normalized_reservations[..normalized_count],
     )
     .map_err(|_| EFI_INVALID_PARAMETER)?;
 
