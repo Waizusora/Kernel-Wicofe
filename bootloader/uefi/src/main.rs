@@ -640,6 +640,14 @@ fn preflight_firmware_cpu_state() -> Result<(), Status> {
     // validator: UEFI may legitimately enter with interrupts enabled.
     // SAFETY: UEFI x86_64 executes this image at CPL 0.
     let state = unsafe { wicofe_kernel_x86_64::capture_handoff_cpu_state() };
+    // Capture GDTR and the live selectors before any future transition work.
+    // This validates selector bounds only; WBL must install its own GDT before
+    // transferring control and must not retain firmware descriptor pointers.
+    // SAFETY: UEFI x86_64 executes this image at CPL 0.
+    let descriptor_table =
+        unsafe { wicofe_kernel_x86_64::capture_descriptor_table_state() };
+    wicofe_kernel_x86_64::validate_descriptor_table_state(descriptor_table)
+        .map_err(|_| EFI_INVALID_PARAMETER)?;
     const CR0_PG: u64 = 1 << 31;
     const CR4_PAE: u64 = 1 << 5;
     const EFER_LMA: u64 = 1 << 10;
