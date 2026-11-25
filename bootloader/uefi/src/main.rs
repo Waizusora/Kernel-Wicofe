@@ -644,8 +644,7 @@ fn preflight_firmware_cpu_state() -> Result<(), Status> {
     // This validates selector bounds only; WBL must install its own GDT before
     // transferring control and must not retain firmware descriptor pointers.
     // SAFETY: UEFI x86_64 executes this image at CPL 0.
-    let descriptor_table =
-        unsafe { wicofe_kernel_x86_64::capture_descriptor_table_state() };
+    let descriptor_table = unsafe { wicofe_kernel_x86_64::capture_descriptor_table_state() };
     wicofe_kernel_x86_64::validate_descriptor_table_state(descriptor_table)
         .map_err(|_| EFI_INVALID_PARAMETER)?;
     const CR0_PG: u64 = 1 << 31;
