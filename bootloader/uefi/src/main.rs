@@ -1569,7 +1569,9 @@ unsafe fn prepare_page_tables(
                 )
             };
             #[cfg(target_arch = "x86_64")]
-            unsafe { free_pages(services, gdt_physical_address, 1) };
+            unsafe {
+                free_pages(services, gdt_physical_address, 1)
+            };
             Err(status)
         }
     }
