@@ -634,7 +634,6 @@ unsafe fn refresh_prepared_boot_info(
 }
 
 #[cfg(target_arch = "x86_64")]
-#[cfg(target_arch = "x86_64")]
 fn preflight_firmware_cpu_state() -> Result<(), Status> {
     // Capture the live firmware state, but do not apply the kernel-entry
     // validator: UEFI may legitimately enter with interrupts enabled.
@@ -668,7 +667,8 @@ fn preflight_firmware_cpu_state() -> Result<(), Status> {
     // translation settings are not yet the final ABI v2 entry state.
     Ok(())
 }
-
+ 
+#[cfg(target_arch = "x86_64")]
 fn current_stack_pointer() -> u64 {
     let stack_pointer: u64;
     // SAFETY: reading RSP does not modify machine state.
