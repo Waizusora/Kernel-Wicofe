@@ -70,7 +70,12 @@ pub struct DescriptorTablePointer {
 
 /// Construct the LGDT operand for a mapped, aligned WBL-owned GDT.
 pub const fn kernel_gdt_pointer(base: u64) -> Option<DescriptorTablePointer> {
-    if base == 0 || base % 8 != 0 {
+    let last_byte = match base.checked_add((core::mem::size_of::<KernelGdt>() - 1) as u64) {
+        Some(address) => address,
+        None => return None,
+    };
+    // WBL maps the GDT at its identity address in the low canonical half.
+    if base == 0 || base % 8 != 0 || last_byte > 0x0000_7fff_ffff_ffff {
         return None;
     }
     Some(DescriptorTablePointer {
@@ -348,6 +353,8 @@ mod tests {
         assert_eq!(base, 0x20_0000);
         assert!(kernel_gdt_pointer(0).is_none());
         assert!(kernel_gdt_pointer(0x20_0001).is_none());
+        assert!(kernel_gdt_pointer(0x0000_8000_0000_0000).is_none());
+        assert!(kernel_gdt_pointer(u64::MAX - 7).is_none());
     }
 
     #[test]
