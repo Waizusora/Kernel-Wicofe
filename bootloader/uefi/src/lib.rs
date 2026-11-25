@@ -286,6 +286,78 @@ pub enum IdentityMappingError {
     OutputTooSmall,
 }
 
+/// Normalize identity ranges to page boundaries and merge overlapping ranges
+/// only when their permissions agree. Adjacent ranges remain distinct.
+pub fn coalesce_identity_mapping_ranges(
+    input: &[IdentityMappingRange],
+    output: &mut [IdentityMappingRange],
+) -> Result<usize, IdentityMappingError> {
+    if input.len() > output.len() {
+        return Err(IdentityMappingError::OutputTooSmall);
+    }
+
+    for (index, range) in input.iter().enumerate() {
+        if range.length == 0 {
+            return Err(IdentityMappingError::InvalidRange);
+        }
+        mapping_access(range.permissions)
+            .map_err(|_| IdentityMappingError::UnsupportedPermissions)?;
+        let end = range
+            .physical_start
+            .checked_add(range.length)
+            .ok_or(IdentityMappingError::AddressOverflow)?;
+        let page_start = range.physical_start & !(UEFI_PAGE_SIZE - 1);
+        let page_end = end
+            .checked_add(UEFI_PAGE_SIZE - 1)
+            .ok_or(IdentityMappingError::AddressOverflow)?
+            & !(UEFI_PAGE_SIZE - 1);
+        if page_end <= page_start {
+            return Err(IdentityMappingError::InvalidRange);
+        }
+        output[index] = IdentityMappingRange {
+            physical_start: page_start,
+            length: page_end - page_start,
+            permissions: range.permissions,
+        };
+    }
+
+    for index in 1..input.len() {
+        let mut cursor = index;
+        while cursor != 0 && output[cursor].physical_start < output[cursor - 1].physical_start {
+            output.swap(cursor, cursor - 1);
+            cursor -= 1;
+        }
+    }
+
+    let mut merged_count = 0usize;
+    for index in 0..input.len() {
+        let current = output[index];
+        if merged_count != 0 {
+            let previous = output[merged_count - 1];
+            let previous_end = previous
+                .physical_start
+                .checked_add(previous.length)
+                .ok_or(IdentityMappingError::AddressOverflow)?;
+            if current.physical_start < previous_end {
+                if current.permissions != previous.permissions {
+                    return Err(IdentityMappingError::OverlappingRange);
+                }
+                let current_end = current
+                    .physical_start
+                    .checked_add(current.length)
+                    .ok_or(IdentityMappingError::AddressOverflow)?;
+                output[merged_count - 1].length =
+                    previous.length.max(current_end - previous.physical_start);
+                continue;
+            }
+        }
+        output[merged_count] = current;
+        merged_count += 1;
+    }
+
+    Ok(merged_count)
+}
+
 /// Plan identity mappings for explicitly supplied WBL-owned physical ranges.
 /// The caller discovers ranges and selects permissions; overlaps fail closed.
 pub fn plan_identity_page_mappings(
@@ -1074,3 +1146,67 @@ pub use memory_map::{
     apply_memory_reservations_in_place, coalesce_memory_reservations,
     decode_uefi_memory_descriptors, translate_uefi_memory_map, validate_active_stack_mapping,
 };
+
+#[cfg(test)]
+mod identity_range_coalescing_tests {
+    use super::*;
+
+    fn range(start: u64, length: u64, permissions: u32) -> IdentityMappingRange {
+        IdentityMappingRange {
+            physical_start: start,
+            length,
+            permissions,
+        }
+    }
+
+    #[test]
+    fn merges_ranges_that_share_a_page_after_rounding() {
+        let input = [range(0x1001, 0x800, MAP_READ), range(0x1800, 0x1000, MAP_READ)];
+        let mut output = [IdentityMappingRange::default(); 2];
+        assert_eq!(coalesce_identity_mapping_ranges(&input, &mut output), Ok(1));
+        assert_eq!(output[0], range(0x1000, 0x2000, MAP_READ));
+    }
+
+    #[test]
+    fn keeps_disjoint_and_adjacent_ranges_separate() {
+        let input = [range(0x3000, 0x1000, MAP_READ), range(0x1000, 0x1000, MAP_READ)];
+        let mut output = [IdentityMappingRange::default(); 2];
+        assert_eq!(coalesce_identity_mapping_ranges(&input, &mut output), Ok(2));
+        assert_eq!(output[0], range(0x1000, 0x1000, MAP_READ));
+        assert_eq!(output[1], range(0x3000, 0x1000, MAP_READ));
+    }
+
+    #[test]
+    fn rejects_overlapping_ranges_with_different_permissions() {
+        let input = [range(0x1000, 0x2000, MAP_READ), range(0x2000, 0x1000, MAP_READ | MAP_WRITE)];
+        let mut output = [IdentityMappingRange::default(); 2];
+        assert_eq!(
+            coalesce_identity_mapping_ranges(&input, &mut output),
+            Err(IdentityMappingError::OverlappingRange)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_permissions_overflow_and_small_output() {
+        let mut output = [IdentityMappingRange::default(); 1];
+        assert_eq!(
+            coalesce_identity_mapping_ranges(&[range(0x1000, 0, MAP_READ)], &mut output),
+            Err(IdentityMappingError::InvalidRange)
+        );
+        assert_eq!(
+            coalesce_identity_mapping_ranges(&[range(0x1000, 0x1000, MAP_WRITE)], &mut output),
+            Err(IdentityMappingError::UnsupportedPermissions)
+        );
+        assert_eq!(
+            coalesce_identity_mapping_ranges(&[range(u64::MAX - 0x7ff, 0x1000, MAP_READ)], &mut output),
+            Err(IdentityMappingError::AddressOverflow)
+        );
+        assert_eq!(
+            coalesce_identity_mapping_ranges(
+                &[range(0x1000, 0x1000, MAP_READ), range(0x3000, 0x1000, MAP_READ)],
+                &mut output
+            ),
+            Err(IdentityMappingError::OutputTooSmall)
+        );
+    }
+}

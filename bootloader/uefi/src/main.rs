@@ -18,8 +18,9 @@ use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::{
     IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ, MAP_WRITE,
-    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, coalesce_memory_reservations,
-    decode_uefi_memory_descriptors, kernel_allocation_layout, page_table_allocation_layout,
+    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, coalesce_identity_mapping_ranges,
+    coalesce_memory_reservations, decode_uefi_memory_descriptors, kernel_allocation_layout,
+    page_table_allocation_layout,
     page_table_pool_capacity, plan_combined_page_mappings, plan_kernel_page_mappings,
     plan_pe_identity_mappings, translate_uefi_memory_map, validate_active_stack_mapping,
 };
@@ -1370,7 +1371,7 @@ unsafe fn prepare_page_tables(
                     unsafe { core::slice::from_raw_parts(pe_mappings, pe_mapping_count) };
 
                 let identity_capacity = pe_mapping_count
-                    .checked_add(3)
+                    .checked_add(4)
                     .ok_or(EFI_INVALID_PARAMETER)?;
                 let identity_ranges =
                     unsafe { allocate_array::<IdentityMappingRange>(services, identity_capacity)? };
@@ -1391,39 +1392,40 @@ unsafe fn prepare_page_tables(
                         };
                     }
 
-                    // Pool allocations may share a physical page. Keep the complete
-                    // BootInfo/map backing span in one read-only identity range so
-                    // page rounding cannot create duplicate leaf mappings. The raw
-                    // map and descriptor scratch inside this span are no longer
-                    // needed after ExitBootServices succeeds.
-                    let info_start = prepared_boot_info.info as u64;
-                    let info_end = info_start
-                        .checked_add(core::mem::size_of::<BootInfo>() as u64)
-                        .ok_or(EFI_INVALID_PARAMETER)?;
-                    let regions_start = prepared_boot_info.regions as u64;
+                    // BootInfo and the canonical region array are the only pool
+                    // allocations needed after ExitBootServices. Normalize their
+                    // page ranges and merge only when rounding makes them overlap.
+                    let info_range = IdentityMappingRange {
+                        physical_start: prepared_boot_info.info as u64,
+                        length: core::mem::size_of::<BootInfo>() as u64,
+                        permissions: MAP_READ,
+                    };
                     let regions_size = prepared_boot_info
                         .region_capacity
                         .checked_mul(core::mem::size_of::<MemoryRegion>())
                         .and_then(|size| u64::try_from(size).ok())
                         .ok_or(EFI_INVALID_PARAMETER)?;
-                    let regions_end = regions_start
-                        .checked_add(regions_size)
-                        .ok_or(EFI_INVALID_PARAMETER)?;
-                    let metadata_start = info_start.min(regions_start);
-                    let metadata_end = info_end.max(regions_end);
-                    ranges[pe_mapping_count] = IdentityMappingRange {
-                        physical_start: metadata_start,
-                        length: metadata_end
-                            .checked_sub(metadata_start)
-                            .ok_or(EFI_INVALID_PARAMETER)?,
+                    let regions_range = IdentityMappingRange {
+                        physical_start: prepared_boot_info.regions as u64,
+                        length: regions_size,
                         permissions: MAP_READ,
                     };
-                    ranges[pe_mapping_count + 1] = active_stack;
-                    ranges[pe_mapping_count + 2] = IdentityMappingRange {
+                    let mut metadata_ranges = [IdentityMappingRange::default(); 2];
+                    let metadata_count = coalesce_identity_mapping_ranges(
+                        &[info_range, regions_range],
+                        &mut metadata_ranges,
+                    )
+                    .map_err(|_| EFI_INVALID_PARAMETER)?;
+                    let metadata_end = pe_mapping_count + metadata_count;
+                    ranges[pe_mapping_count..metadata_end]
+                        .copy_from_slice(&metadata_ranges[..metadata_count]);
+                    ranges[metadata_end] = active_stack;
+                    ranges[metadata_end + 1] = IdentityMappingRange {
                         physical_start: bootstrap_stack.stack_base,
                         length: BOOTSTRAP_STACK_LAYOUT.stack_size,
                         permissions: MAP_READ | MAP_WRITE,
                     };
+                    let identity_count = metadata_end + 2;
 
                     let combined_capacity = kernel_mapping_count
                         .checked_add(identity_capacity)
@@ -1436,7 +1438,11 @@ unsafe fn prepare_page_tables(
                         let combined_output =
                             unsafe { core::slice::from_raw_parts_mut(combined, combined_capacity) };
                         let combined_count =
-                            plan_combined_page_mappings(kernel_mappings, ranges, combined_output)
+                            plan_combined_page_mappings(
+                                kernel_mappings,
+                                &ranges[..identity_count],
+                                combined_output,
+                            )
                                 .map_err(|_| EFI_INVALID_PARAMETER)?;
                         // SAFETY: only the initialized combined mappings are exposed.
                         let combined_slice =
