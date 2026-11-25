@@ -667,7 +667,6 @@ fn preflight_firmware_cpu_state() -> Result<(), Status> {
     // translation settings are not yet the final ABI v2 entry state.
     Ok(())
 }
- 
 #[cfg(target_arch = "x86_64")]
 fn current_stack_pointer() -> u64 {
     let stack_pointer: u64;
