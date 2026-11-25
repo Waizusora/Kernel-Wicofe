@@ -50,7 +50,7 @@ pub enum DescriptorTableStateError {
 pub const fn validate_descriptor_table_state(
     state: DescriptorTableState,
 ) -> Result<(), DescriptorTableStateError> {
-    if state.base.checked_add(u64::from(state.limit)).is_none() {
+    if state.base.checked_add(state.limit as u64).is_none() {
         return Err(DescriptorTableStateError::DescriptorTableAddressOverflow);
     }
     if state.cs & !0b11 == 0 {
@@ -62,8 +62,8 @@ pub const fn validate_descriptor_table_state(
     if state.cs & 0b11 != 0 {
         return Err(DescriptorTableStateError::CodeSelectorPrivilegeMismatch);
     }
-    let descriptor_end = u32::from(state.cs & !0b111) + 7;
-    if descriptor_end > u32::from(state.limit) {
+    let descriptor_end = (state.cs & !0b111) as u32 + 7;
+    if descriptor_end > state.limit as u32 {
         return Err(DescriptorTableStateError::CodeDescriptorOutsideTable);
     }
     Ok(())
