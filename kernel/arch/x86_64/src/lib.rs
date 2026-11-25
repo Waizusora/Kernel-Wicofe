@@ -346,8 +346,8 @@ mod tests {
         let base = unsafe { core::ptr::addr_of!(pointer.base).read_unaligned() };
         assert_eq!(limit, 23);
         assert_eq!(base, 0x20_0000);
-        assert_eq!(kernel_gdt_pointer(0), None);
-        assert_eq!(kernel_gdt_pointer(0x20_0001), None);
+        assert!(kernel_gdt_pointer(0).is_none());
+        assert!(kernel_gdt_pointer(0x20_0001).is_none());
     }
 
     #[test]
