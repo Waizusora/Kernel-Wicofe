@@ -503,10 +503,16 @@ mod tests {
         );
         state = valid_kernel_entry_state();
         state.ds = 0;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::InvalidDataSelector)
+        );
         state = valid_kernel_entry_state();
         state.es = 0;
-        assert_eq!(validate_kernel_entry_state(state), Err(KernelEntryStateError::InvalidDataSelector));
+        assert_eq!(
+            validate_kernel_entry_state(state),
+            Err(KernelEntryStateError::InvalidDataSelector)
+        );
     }
 
     #[test]
