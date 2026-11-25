@@ -1306,8 +1306,14 @@ mod reservation_coalescing_tests {
         ];
         let mut output = [reservation(0, 0, 0); 3];
         assert_eq!(coalesce_memory_reservations(&input, &mut output), Ok(3));
-        assert_eq!(output[0], reservation(0x1000, 0x1000, memory_kind::BOOT_INFO));
-        assert_eq!(output[1], reservation(0x2000, 0x1000, memory_kind::BOOT_INFO));
+        assert_eq!(
+            output[0],
+            reservation(0x1000, 0x1000, memory_kind::BOOT_INFO)
+        );
+        assert_eq!(
+            output[1],
+            reservation(0x2000, 0x1000, memory_kind::BOOT_INFO)
+        );
         assert_eq!(output[2], reservation(0x3000, 0x1000, memory_kind::KERNEL));
     }
 
