@@ -256,9 +256,7 @@ pub fn coalesce_memory_reservations(
 
     for index in 1..input.len() {
         let mut cursor = index;
-        while cursor != 0
-            && output[cursor].physical_start < output[cursor - 1].physical_start
-        {
+        while cursor != 0 && output[cursor].physical_start < output[cursor - 1].physical_start {
             output.swap(cursor, cursor - 1);
             cursor -= 1;
         }
@@ -283,13 +281,6 @@ pub fn coalesce_memory_reservations(
                     .ok_or(ReservationError::AddressOverflow)?;
                 output[merged_count - 1].length =
                     previous.length.max(current_end - previous.physical_start);
-                continue;
-            }
-            if current.physical_start == previous_end && current.kind == previous.kind {
-                output[merged_count - 1].length = previous
-                    .length
-                    .checked_add(current.length)
-                    .ok_or(ReservationError::AddressOverflow)?;
                 continue;
             }
         }
@@ -1300,20 +1291,24 @@ mod reservation_coalescing_tests {
         let mut output = [reservation(0, 0, 0); 3];
         assert_eq!(coalesce_memory_reservations(&input, &mut output), Ok(2));
         assert_eq!(output[0], reservation(0x4000, 0x1000, memory_kind::KERNEL));
-        assert_eq!(output[1], reservation(0x5000, 0x2000, memory_kind::BOOT_INFO));
+        assert_eq!(
+            output[1],
+            reservation(0x5000, 0x2000, memory_kind::BOOT_INFO)
+        );
     }
 
     #[test]
-    fn merges_adjacent_same_kind_but_keeps_different_kinds_separate() {
+    fn keeps_adjacent_ranges_separate_for_descriptor_containment() {
         let input = [
             reservation(0x2000, 0x1000, memory_kind::BOOT_INFO),
             reservation(0x1000, 0x1000, memory_kind::BOOT_INFO),
             reservation(0x3000, 0x1000, memory_kind::KERNEL),
         ];
         let mut output = [reservation(0, 0, 0); 3];
-        assert_eq!(coalesce_memory_reservations(&input, &mut output), Ok(2));
-        assert_eq!(output[0], reservation(0x1000, 0x2000, memory_kind::BOOT_INFO));
-        assert_eq!(output[1], reservation(0x3000, 0x1000, memory_kind::KERNEL));
+        assert_eq!(coalesce_memory_reservations(&input, &mut output), Ok(3));
+        assert_eq!(output[0], reservation(0x1000, 0x1000, memory_kind::BOOT_INFO));
+        assert_eq!(output[1], reservation(0x2000, 0x1000, memory_kind::BOOT_INFO));
+        assert_eq!(output[2], reservation(0x3000, 0x1000, memory_kind::KERNEL));
     }
 
     #[test]
@@ -1341,7 +1336,11 @@ mod reservation_coalescing_tests {
         );
         assert_eq!(
             coalesce_memory_reservations(
-                &[reservation(u64::MAX - 0x7ff, 0x1000, memory_kind::BOOT_INFO)],
+                &[reservation(
+                    u64::MAX - 0x7ff,
+                    0x1000,
+                    memory_kind::BOOT_INFO
+                )],
                 &mut output
             ),
             Err(ReservationError::AddressOverflow)

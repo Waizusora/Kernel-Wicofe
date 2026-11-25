@@ -18,10 +18,10 @@ use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::convert_kernel_page_mappings;
 use wicofe_bootloader_uefi::{
     IdentityMappingRange, KERNEL_PHYSICAL_ALIGNMENT, KernelPageMapping, MAP_READ, MAP_WRITE,
-    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
-    kernel_allocation_layout, page_table_allocation_layout, page_table_pool_capacity,
-    plan_combined_page_mappings, plan_kernel_page_mappings, plan_pe_identity_mappings,
-    coalesce_memory_reservations, translate_uefi_memory_map, validate_active_stack_mapping,
+    MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, coalesce_memory_reservations,
+    decode_uefi_memory_descriptors, kernel_allocation_layout, page_table_allocation_layout,
+    page_table_pool_capacity, plan_combined_page_mappings, plan_kernel_page_mappings,
+    plan_pe_identity_mappings, translate_uefi_memory_map, validate_active_stack_mapping,
 };
 
 type Status = usize;
@@ -609,8 +609,9 @@ unsafe fn refresh_prepared_boot_info(
         length: 0,
         kind: memory_kind::BOOT_INFO,
     }; 7];
-    let normalized_count = coalesce_memory_reservations(&reservations, &mut normalized_reservations)
-        .map_err(|_| EFI_INVALID_PARAMETER)?;
+    let normalized_count =
+        coalesce_memory_reservations(&reservations, &mut normalized_reservations)
+            .map_err(|_| EFI_INVALID_PARAMETER)?;
     let region_count = wicofe_bootloader_uefi::apply_memory_reservations_in_place(
         region_output,
         translated_count,
