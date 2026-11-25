@@ -21,7 +21,7 @@ use wicofe_bootloader_uefi::{
     MAX_PE_IDENTITY_MAPPINGS, UEFI_PAGE_SIZE, UefiMemoryDescriptor, decode_uefi_memory_descriptors,
     kernel_allocation_layout, page_table_allocation_layout, page_table_pool_capacity,
     plan_combined_page_mappings, plan_kernel_page_mappings, plan_pe_identity_mappings,
-    translate_uefi_memory_map,
+    translate_uefi_memory_map, validate_active_stack_mapping,
 };
 
 type Status = usize;
@@ -526,6 +526,18 @@ unsafe fn refresh_prepared_boot_info(
         return Err(EFI_INVALID_PARAMETER);
     }
 
+    // Verify that allocations made after the original snapshot did not split
+    // or otherwise change the descriptor containing the active firmware stack.
+    // SAFETY: decoder initialized exactly descriptor_count entries.
+    let decoded = unsafe { core::slice::from_raw_parts(prepared.descriptors, decoded_count) };
+    validate_active_stack_mapping(
+        decoded,
+        tables.active_stack_mapping.physical_start,
+        tables.active_stack_mapping.length,
+        current_stack_pointer(),
+    )
+    .map_err(|_| EFI_INVALID_PARAMETER)?;
+
     // SAFETY: decoder initialized exactly descriptor_count entries.
     let decoded = unsafe { core::slice::from_raw_parts(prepared.descriptors, decoded_count) };
     // SAFETY: region storage has region_capacity writable entries.
@@ -991,6 +1003,7 @@ struct PreparedPageTables {
     bootstrap_stack_pages: usize,
     bootstrap_stack_allocation_base: u64,
     table_pool_pages: usize,
+    active_stack_mapping: IdentityMappingRange,
 }
 
 #[derive(Clone, Copy)]
@@ -1180,6 +1193,7 @@ unsafe fn build_architecture_page_tables(
                     bootstrap_stack_pages: 0,
                     bootstrap_stack_allocation_base: 0,
                     table_pool_pages: table_count,
+                    active_stack_mapping: IdentityMappingRange::default(),
                 })
             })();
             // SAFETY: addresses was allocated above.
@@ -1281,6 +1295,7 @@ unsafe fn build_architecture_page_tables(
                     bootstrap_stack_pages: 0,
                     bootstrap_stack_allocation_base: 0,
                     table_pool_pages: table_count,
+                    active_stack_mapping: IdentityMappingRange::default(),
                 })
             })();
             // SAFETY: addresses was allocated above.
@@ -1307,6 +1322,9 @@ unsafe fn prepare_page_tables(
     loader_image_size: usize,
     prepared_boot_info: &PreparedBootInfo,
 ) -> Result<PreparedPageTables, Status> {
+    // Capture the active firmware stack descriptor before allocations below
+    // can split its memory-map entry.
+    let active_stack = active_stack_mapping(prepared_boot_info)?;
     let segment_capacity = usize::from(parsed.program_header_count());
     let segments = unsafe { allocate_array::<LoadSegment>(services, segment_capacity)? };
     let bootstrap_stack = match unsafe { allocate_bootstrap_stack(services) } {
@@ -1412,7 +1430,7 @@ unsafe fn prepare_page_tables(
                             .ok_or(EFI_INVALID_PARAMETER)?,
                         permissions: MAP_READ,
                     };
-                    ranges[pe_mapping_count + 1] = active_stack_mapping(prepared_boot_info)?;
+                    ranges[pe_mapping_count + 1] = active_stack;
                     ranges[pe_mapping_count + 2] = IdentityMappingRange {
                         physical_start: bootstrap_stack.stack_base,
                         length: BOOTSTRAP_STACK_LAYOUT.stack_size,
@@ -1461,6 +1479,7 @@ unsafe fn prepare_page_tables(
             tables.bootstrap_stack_top = bootstrap_stack.stack_top;
             tables.bootstrap_stack_pages = bootstrap_stack.allocation_pages;
             tables.bootstrap_stack_allocation_base = bootstrap_stack.allocation_base;
+            tables.active_stack_mapping = active_stack;
             Ok(tables)
         }
         Err(status) => {

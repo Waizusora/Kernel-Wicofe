@@ -43,6 +43,52 @@ pub struct UefiMemoryDescriptor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActiveStackMappingError {
+    NoContainingDescriptor,
+    UnsupportedMemoryType,
+    InvalidDescriptorRange,
+    DescriptorChanged,
+}
+
+/// Confirm that the active firmware stack still occupies the exact descriptor
+/// range captured when its identity mapping was planned.
+pub fn validate_active_stack_mapping(
+    descriptors: &[UefiMemoryDescriptor],
+    expected_start: u64,
+    expected_length: u64,
+    stack_pointer: u64,
+) -> Result<(), ActiveStackMappingError> {
+    let descriptor = descriptors
+        .iter()
+        .find(|descriptor| {
+            let Some(length) = descriptor.number_of_pages.checked_mul(EFI_PAGE_SIZE) else {
+                return false;
+            };
+            let Some(end) = descriptor.physical_start.checked_add(length) else {
+                return false;
+            };
+            descriptor.number_of_pages != 0
+                && stack_pointer >= descriptor.physical_start
+                && stack_pointer < end
+        })
+        .ok_or(ActiveStackMappingError::NoContainingDescriptor)?;
+
+    if descriptor.memory_type != EFI_LOADER_DATA
+        && descriptor.memory_type != EFI_BOOT_SERVICES_DATA
+    {
+        return Err(ActiveStackMappingError::UnsupportedMemoryType);
+    }
+    let length = descriptor
+        .number_of_pages
+        .checked_mul(EFI_PAGE_SIZE)
+        .ok_or(ActiveStackMappingError::InvalidDescriptorRange)?;
+    if descriptor.physical_start != expected_start || length != expected_length {
+        return Err(ActiveStackMappingError::DescriptorChanged);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryMapError {
     EmptyDescriptor,
     MisalignedPhysicalAddress,
@@ -1083,6 +1129,68 @@ mod reservation_tests {
                 &mut output,
             ),
             Err(ReservationError::OutputTooSmall)
+        );
+    }
+}
+
+#[cfg(test)]
+mod active_stack_mapping_tests {
+    use super::*;
+
+    fn descriptor(memory_type: u32, start: u64, pages: u64) -> UefiMemoryDescriptor {
+        UefiMemoryDescriptor {
+            memory_type,
+            physical_start: start,
+            number_of_pages: pages,
+            ..UefiMemoryDescriptor::default()
+        }
+    }
+
+    #[test]
+    fn accepts_unchanged_loader_stack_descriptor() {
+        let descriptors = [descriptor(EFI_LOADER_DATA, 0x10_0000, 16)];
+        assert_eq!(
+            validate_active_stack_mapping(&descriptors, 0x10_0000, 16 * EFI_PAGE_SIZE, 0x10_8000),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn accepts_unchanged_boot_services_stack_descriptor() {
+        let descriptors = [descriptor(EFI_BOOT_SERVICES_DATA, 0x20_0000, 8)];
+        assert_eq!(
+            validate_active_stack_mapping(&descriptors, 0x20_0000, 8 * EFI_PAGE_SIZE, 0x20_4000),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rejects_descriptor_split_after_mapping_was_planned() {
+        let descriptors = [
+            descriptor(EFI_LOADER_DATA, 0x30_0000, 4),
+            descriptor(EFI_BOOT_SERVICES_DATA, 0x30_4000, 4),
+        ];
+        assert_eq!(
+            validate_active_stack_mapping(&descriptors, 0x30_0000, 8 * EFI_PAGE_SIZE, 0x30_6000),
+            Err(ActiveStackMappingError::DescriptorChanged)
+        );
+    }
+
+    #[test]
+    fn rejects_stack_pointer_outside_all_descriptors() {
+        let descriptors = [descriptor(EFI_LOADER_DATA, 0x40_0000, 2)];
+        assert_eq!(
+            validate_active_stack_mapping(&descriptors, 0x40_0000, 2 * EFI_PAGE_SIZE, 0x50_0000),
+            Err(ActiveStackMappingError::NoContainingDescriptor)
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_stack_memory_type() {
+        let descriptors = [descriptor(EFI_RUNTIME_SERVICES_DATA, 0x60_0000, 2)];
+        assert_eq!(
+            validate_active_stack_mapping(&descriptors, 0x60_0000, 2 * EFI_PAGE_SIZE, 0x60_1000),
+            Err(ActiveStackMappingError::UnsupportedMemoryType)
         );
     }
 }
