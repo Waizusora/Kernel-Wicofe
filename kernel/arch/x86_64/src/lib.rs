@@ -20,13 +20,13 @@ pub struct HandoffCpuState {
     pub cs: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Capture the current privileged CPU state without changing it.
 ///
 /// # Safety
 ///
 /// The caller must execute at CPL 0. Reading control registers and EFER from
 /// an unprivileged context would fault.
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn capture_handoff_cpu_state() -> HandoffCpuState {
     let cr0: u64;
     let cr4: u64;
@@ -59,6 +59,7 @@ pub unsafe fn capture_handoff_cpu_state() -> HandoffCpuState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HandoffCpuStateError {
     PagingDisabled,
     WriteProtectDisabled,

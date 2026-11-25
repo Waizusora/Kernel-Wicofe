@@ -23,7 +23,6 @@ pub struct HandoffCpuState {
     pub ttbr1_el1: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Capture the current AArch64 EL1 translation and exception state.
 ///
 /// Returns an error without reading EL1-only registers when firmware is not
@@ -33,8 +32,8 @@ pub struct HandoffCpuState {
 ///
 /// The caller must execute in AArch64 state with permission to read the
 /// architectural system registers used by the ABI v2 handoff contract.
-pub unsafe fn capture_handoff_cpu_state(
-) -> Result<HandoffCpuState, HandoffCpuStateError> {
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn capture_handoff_cpu_state() -> Result<HandoffCpuState, HandoffCpuStateError> {
     let current_el: u64;
     // SAFETY: the caller guarantees AArch64 privileged execution.
     unsafe {
@@ -76,6 +75,7 @@ pub unsafe fn capture_handoff_cpu_state(
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HandoffCpuStateError {
     UnsupportedExceptionLevel,
     NotAarch64State,
