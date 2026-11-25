@@ -237,9 +237,22 @@ ExitBootServices transaction. Consequently, the kernel handoff is not
 operational. A successful CI build proves PE/COFF compilation only; it does
 not prove execution on firmware or QEMU.
 
-The x86-64 and AArch64 architecture crates now expose pure validators for
-captured CPU handoff state. They check the ABI-required control/translation
-bits, exception masks, and privilege or exception level. WBL does not yet
-capture these register snapshots or invoke the validators; they are
-preflight primitives, not evidence that firmware currently satisfies the
-entry contract.
+The x86-64 and AArch64 architecture crates expose read-only CPU-state
+capture primitives and pure validators for the ABI v2 kernel-entry state.
+WBL invokes a separate firmware preflight after page-table preparation:
+
+- x86-64 capture verifies that firmware is executing at CPL 0 with paging,
+  PAE, and long mode active. It deliberately does not require firmware
+  interrupt or direction-flag state to match the kernel-entry ABI.
+- AArch64 capture requires firmware to be executing in AArch64 state at EL1
+  before reading EL1-only registers. EL2 firmware is rejected; an EL2-to-EL1
+  transition is not implemented.
+- Neither preflight changes control registers, translation registers,
+  exception masks, active page tables, or the active stack.
+
+These checks establish only that the current firmware execution environment
+is within the supported preflight envelope. They do not establish the ABI v2
+kernel-entry state. WBL still does not activate the prepared page tables,
+program the final architecture state, switch to the bootstrap stack, perform
+the final GetMemoryMap / ExitBootServices transaction, or branch to the
+kernel. The handoff remains non-operational.
