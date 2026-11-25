@@ -21,6 +21,44 @@ pub struct HandoffCpuState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Capture the current privileged CPU state without changing it.
+///
+/// # Safety
+///
+/// The caller must execute at CPL 0. Reading control registers and EFER from
+/// an unprivileged context would fault.
+pub unsafe fn capture_handoff_cpu_state() -> HandoffCpuState {
+    let cr0: u64;
+    let cr4: u64;
+    let rflags: u64;
+    let cs: u16;
+    let efer_low: u32;
+    let efer_high: u32;
+
+    // SAFETY: the caller guarantees CPL 0; these instructions only read state.
+    unsafe {
+        core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("pushfq", "pop {}", out(reg) rflags, options(preserves_flags));
+        core::arch::asm!("mov {0:x}, cs", out(reg) cs, options(nomem, nostack, preserves_flags));
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") 0xc000_0080u32,
+            out("eax") efer_low,
+            out("edx") efer_high,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+
+    HandoffCpuState {
+        cr0,
+        cr4,
+        efer: (u64::from(efer_high) << 32) | u64::from(efer_low),
+        rflags,
+        cs,
+    }
+}
+
 pub enum HandoffCpuStateError {
     PagingDisabled,
     WriteProtectDisabled,
