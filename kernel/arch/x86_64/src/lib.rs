@@ -20,6 +20,50 @@ pub struct HandoffCpuState {
     pub cs: u16,
 }
 
+/// Selectors reserved by the WBL/kernel x86_64 entry contract.
+pub const KERNEL_CODE_SELECTOR: u16 = 0x08;
+pub const KERNEL_DATA_SELECTOR: u16 = 0x10;
+
+/// Null, flat 64-bit ring-0 code, and flat ring-0 data descriptors.
+///
+/// The code descriptor has L=1 and D=0. The data descriptor has L=0.
+/// Both descriptors are present, base-zero, 4 GiB-granularity segments.
+/// This table is a pure template: defining it does not execute LGDT.
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelGdt {
+    pub entries: [u64; 3],
+}
+
+pub const KERNEL_GDT: KernelGdt = KernelGdt {
+    entries: [
+        0,
+        0x00af_9a00_0000_ffff,
+        0x00cf_9200_0000_ffff,
+    ],
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KernelGdtError {
+    NullDescriptorNotZero,
+    InvalidCodeDescriptor,
+    InvalidDataDescriptor,
+}
+
+/// Validate the fixed WBL-owned GDT template before copying it to mapped memory.
+pub const fn validate_kernel_gdt(gdt: &KernelGdt) -> Result<(), KernelGdtError> {
+    if gdt.entries[0] != 0 {
+        return Err(KernelGdtError::NullDescriptorNotZero);
+    }
+    if gdt.entries[1] != KERNEL_GDT.entries[1] {
+        return Err(KernelGdtError::InvalidCodeDescriptor);
+    }
+    if gdt.entries[2] != KERNEL_GDT.entries[2] {
+        return Err(KernelGdtError::InvalidDataDescriptor);
+    }
+    Ok(())
+}
+
 /// Snapshot of the active x86_64 global descriptor table and segment selectors.
 ///
 /// This records descriptor-table metadata only; it does not prove that the
@@ -276,6 +320,37 @@ mod tests {
         assert_eq!(
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::NotRunningAtKernelPrivilege)
+        );
+    }
+
+    #[test]
+    fn kernel_gdt_template_has_expected_selectors_and_layout() {
+        assert_eq!(KERNEL_CODE_SELECTOR, 0x08);
+        assert_eq!(KERNEL_DATA_SELECTOR, 0x10);
+        assert_eq!(core::mem::size_of::<KernelGdt>(), 24);
+        assert_eq!(core::mem::align_of::<KernelGdt>(), 8);
+        assert_eq!(validate_kernel_gdt(&KERNEL_GDT), Ok(()));
+    }
+
+    #[test]
+    fn kernel_gdt_validator_rejects_modified_descriptors() {
+        let mut gdt = KERNEL_GDT;
+        gdt.entries[0] = 1;
+        assert_eq!(
+            validate_kernel_gdt(&gdt),
+            Err(KernelGdtError::NullDescriptorNotZero)
+        );
+        gdt = KERNEL_GDT;
+        gdt.entries[1] ^= 1 << 47;
+        assert_eq!(
+            validate_kernel_gdt(&gdt),
+            Err(KernelGdtError::InvalidCodeDescriptor)
+        );
+        gdt = KERNEL_GDT;
+        gdt.entries[2] ^= 1 << 47;
+        assert_eq!(
+            validate_kernel_gdt(&gdt),
+            Err(KernelGdtError::InvalidDataDescriptor)
         );
     }
 
