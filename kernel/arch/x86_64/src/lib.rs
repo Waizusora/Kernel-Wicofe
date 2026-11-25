@@ -64,6 +64,7 @@ pub enum HandoffCpuStateError {
     PagingDisabled,
     WriteProtectDisabled,
     PhysicalAddressExtensionsDisabled,
+    FiveLevelPagingEnabled,
     LongModeDisabled,
     InterruptsEnabled,
     DirectionFlagSet,
@@ -81,6 +82,7 @@ pub const fn validate_handoff_cpu_state(
     const CR0_PG: u64 = 1 << 31;
     const CR0_WP: u64 = 1 << 16;
     const CR4_PAE: u64 = 1 << 5;
+    const CR4_LA57: u64 = 1 << 12;
     const EFER_LME: u64 = 1 << 8;
     const EFER_LMA: u64 = 1 << 10;
     const RFLAGS_IF: u64 = 1 << 9;
@@ -94,6 +96,9 @@ pub const fn validate_handoff_cpu_state(
     }
     if state.cr4 & CR4_PAE == 0 {
         return Err(HandoffCpuStateError::PhysicalAddressExtensionsDisabled);
+    }
+    if state.cr4 & CR4_LA57 != 0 {
+        return Err(HandoffCpuStateError::FiveLevelPagingEnabled);
     }
     if state.efer & (EFER_LME | EFER_LMA) != (EFER_LME | EFER_LMA) {
         return Err(HandoffCpuStateError::LongModeDisabled);
@@ -158,6 +163,16 @@ mod tests {
         assert_eq!(
             validate_handoff_cpu_state(state),
             Err(HandoffCpuStateError::LongModeDisabled)
+        );
+    }
+
+    #[test]
+    fn rejects_five_level_paging_mode() {
+        let mut state = valid_handoff_state();
+        state.cr4 |= 1 << 12;
+        assert_eq!(
+            validate_handoff_cpu_state(state),
+            Err(HandoffCpuStateError::FiveLevelPagingEnabled)
         );
     }
 
