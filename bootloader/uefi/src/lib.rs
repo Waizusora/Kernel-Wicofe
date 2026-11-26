@@ -1501,6 +1501,45 @@ mod page_table_pool_tests {
     }
 
     #[test]
+    fn page_table_pool_capacity_covers_self_mapping_boundaries() {
+        for base_capacity in [
+            1,
+            511,
+            512,
+            513,
+            1 << 18,
+            (1 << 18) + 1,
+            1 << 27,
+        ] {
+            let capacity = page_table_pool_capacity(base_capacity).unwrap();
+            let maximum_regions_touched = |pages: usize, region_pages: usize| {
+                (pages + region_pages - 2) / region_pages + 1
+            };
+            let required = base_capacity
+                + maximum_regions_touched(capacity, 1 << 27)
+                + maximum_regions_touched(capacity, 1 << 18)
+                + maximum_regions_touched(capacity, 1 << 9);
+            assert!(capacity >= required);
+        }
+    }
+
+    #[test]
+    fn page_table_pool_capacity_and_allocation_layout_reject_overflow() {
+        assert_eq!(page_table_pool_capacity(0), None);
+        assert_eq!(page_table_pool_capacity(usize::MAX), None);
+        assert_eq!(page_table_allocation_layout(0), None);
+        assert_eq!(page_table_allocation_layout(usize::MAX), None);
+        assert_eq!(
+            page_table_allocation_layout(4),
+            Some(PageTableAllocationLayout {
+                table_count: 4,
+                allocation_size: 4 * UEFI_PAGE_SIZE,
+                allocation_pages: 4,
+            })
+        );
+    }
+
+    #[test]
     fn accepts_exact_read_write_non_executable_identity_pool() {
         assert_eq!(
             validate_page_table_pool_mapping(&[], &pool_mapping(), 0x80_0000, 4),
