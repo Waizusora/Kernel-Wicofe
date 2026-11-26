@@ -214,7 +214,7 @@ pub fn validate_page_table_topology(
 
     for parent in 0..used_table_count {
         for entry in tables[parent] {
-            if entry & PRESENT == 0 {
+            if entry & PRESENT == 0 || entry & (WRITABLE | NO_EXECUTE) != WRITABLE {
                 continue;
             }
             if entry & !(PHYSICAL_ADDRESS_MASK | PRESENT | WRITABLE) != 0 {

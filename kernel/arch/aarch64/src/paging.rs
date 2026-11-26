@@ -239,7 +239,7 @@ pub fn validate_page_table_topology(
 
     for parent in 0..used_table_count {
         for entry in tables[parent] {
-            if entry & VALID == 0 {
+            if entry & VALID == 0 || entry & ACCESS_FLAG != 0 {
                 continue;
             }
             if entry & PAGE_DESCRIPTOR == 0
