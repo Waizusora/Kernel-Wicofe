@@ -1179,17 +1179,26 @@ unsafe fn build_architecture_page_tables(
         let table_count =
             page_table_pool_capacity(base_table_count).ok_or(EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
+        let pool_page_count =
+            u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?;
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
-        output[mappings.len()] = wicofe_kernel_x86_64::paging::PageMapping {
-            virtual_start: table_base,
+        let pool_mapping = KernelPageMapping {
             physical_start: table_base,
-            page_count: u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?,
+            virtual_start: table_base,
+            page_count: pool_page_count,
+            permissions: MAP_READ | MAP_WRITE,
+        };
+        output[mappings.len()] = wicofe_kernel_x86_64::paging::PageMapping {
+            virtual_start: pool_mapping.virtual_start,
+            physical_start: pool_mapping.physical_start,
+            page_count: pool_mapping.page_count,
             writable: true,
             executable: false,
         };
         let converted = &output[..mapping_capacity];
         if wicofe_bootloader_uefi::validate_page_table_pool_mapping(
             mappings,
+            &pool_mapping,
             table_base,
             table_count,
         )
@@ -1299,11 +1308,19 @@ unsafe fn build_architecture_page_tables(
         let table_count =
             page_table_pool_capacity(base_table_count).ok_or(EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
+        let pool_page_count =
+            u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?;
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
-        output[mappings.len()] = wicofe_kernel_aarch64::paging::PageMapping {
-            virtual_start: table_base,
+        let pool_mapping = KernelPageMapping {
             physical_start: table_base,
-            page_count: u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?,
+            virtual_start: table_base,
+            page_count: pool_page_count,
+            permissions: MAP_READ | MAP_WRITE,
+        };
+        output[mappings.len()] = wicofe_kernel_aarch64::paging::PageMapping {
+            virtual_start: pool_mapping.virtual_start,
+            physical_start: pool_mapping.physical_start,
+            page_count: pool_mapping.page_count,
             writable: true,
             executable: false,
             attribute_index: 0,
@@ -1311,6 +1328,7 @@ unsafe fn build_architecture_page_tables(
         let converted = &output[..mapping_capacity];
         if wicofe_bootloader_uefi::validate_page_table_pool_mapping(
             mappings,
+            &pool_mapping,
             table_base,
             table_count,
         )
