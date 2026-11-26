@@ -230,6 +230,104 @@ mod tests {
     }
 
     #[test]
+    fn range_coverage_accepts_adjacent_regions_of_the_expected_kind() {
+        let map = [
+            MemoryRegion {
+                physical_start: 0x1000,
+                length: 0x1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
+            MemoryRegion {
+                physical_start: 0x2000,
+                length: 0x1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
+        ];
+
+        assert!(range_is_covered_by_kind(
+            &map,
+            0x1800,
+            0x2800,
+            memory_kind::BOOT_INFO,
+        ));
+    }
+
+    #[test]
+    fn range_coverage_rejects_a_gap_between_regions() {
+        let map = [
+            MemoryRegion {
+                physical_start: 0x1000,
+                length: 0x800,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
+            MemoryRegion {
+                physical_start: 0x2000,
+                length: 0x1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
+        ];
+
+        assert!(!range_is_covered_by_kind(
+            &map,
+            0x1000,
+            0x2800,
+            memory_kind::BOOT_INFO,
+        ));
+    }
+
+    #[test]
+    fn range_coverage_rejects_a_wrong_kind_in_the_middle() {
+        let map = [
+            MemoryRegion {
+                physical_start: 0x1000,
+                length: 0x1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
+            MemoryRegion {
+                physical_start: 0x2000,
+                length: 0x1000,
+                kind: memory_kind::USABLE,
+                attributes: 0,
+            },
+            MemoryRegion {
+                physical_start: 0x3000,
+                length: 0x1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
+        ];
+
+        assert!(!range_is_covered_by_kind(
+            &map,
+            0x1800,
+            0x3800,
+            memory_kind::BOOT_INFO,
+        ));
+    }
+
+    #[test]
+    fn range_coverage_rejects_region_address_overflow() {
+        let map = [MemoryRegion {
+            physical_start: u64::MAX - 0x7ff,
+            length: 0x1000,
+            kind: memory_kind::BOOT_INFO,
+            attributes: 0,
+        }];
+
+        assert!(!range_is_covered_by_kind(
+            &map,
+            u64::MAX - 0x7ff,
+            u64::MAX,
+            memory_kind::BOOT_INFO,
+        ));
+    }
+
+    #[test]
     fn accepts_matching_x86_64_handoff() {
         assert_eq!(
             validate_boot_handoff(
