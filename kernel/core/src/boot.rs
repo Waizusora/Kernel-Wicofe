@@ -43,21 +43,6 @@ impl<'a> ValidatedBootHandoff<'a> {
     ) -> Result<Self, KernelBootError> {
         validate_boot_info(info, memory_map).map_err(KernelBootError::InvalidBootInfo)?;
 
-        let boot_info_end = boot_info_physical_address
-            .checked_add(core::mem::size_of::<BootInfo>() as u64)
-            .ok_or(KernelBootError::BootInfoNotReserved)?;
-        if boot_info_physical_address == 0
-            || boot_info_physical_address % core::mem::align_of::<BootInfo>() as u64 != 0
-            || !range_is_covered_by_kind(
-                memory_map,
-                boot_info_physical_address,
-                boot_info_end,
-                wicofe_bootloader_common::memory_kind::BOOT_INFO,
-            )
-        {
-            return Err(KernelBootError::BootInfoNotReserved);
-        }
-
         if expected_architecture != architecture::X86_64
             && expected_architecture != architecture::AARCH64
         {
@@ -89,6 +74,22 @@ impl<'a> ValidatedBootHandoff<'a> {
             wicofe_bootloader_common::memory_kind::BOOT_INFO,
         ) {
             return Err(KernelBootError::MemoryMapNotReserved);
+        }
+
+
+        let boot_info_end = boot_info_physical_address
+            .checked_add(core::mem::size_of::<BootInfo>() as u64)
+            .ok_or(KernelBootError::BootInfoNotReserved)?;
+        if boot_info_physical_address == 0
+            || boot_info_physical_address % core::mem::align_of::<BootInfo>() as u64 != 0
+            || !range_is_covered_by_kind(
+                memory_map,
+                boot_info_physical_address,
+                boot_info_end,
+                wicofe_bootloader_common::memory_kind::BOOT_INFO,
+            )
+        {
+            return Err(KernelBootError::BootInfoNotReserved);
         }
 
         let kernel_image_end = info
@@ -358,7 +359,7 @@ mod tests {
         map[0].kind = memory_kind::USABLE;
 
         assert_eq!(
-            validate_boot_handoff(architecture::X86_64, 0x8800, &info, &map),
+            validate_boot_handoff(architecture::X86_64, 0x100000, &info, &map),
             Err(KernelBootError::BootInfoNotReserved)
         );
     }
