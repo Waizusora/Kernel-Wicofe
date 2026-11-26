@@ -26,6 +26,7 @@ pub enum PagingError {
     InvalidTablePool,
     TablePoolExhausted,
     DuplicateMapping,
+    InvalidTableTopology,
     AddressOverflow,
 }
 
@@ -219,7 +220,62 @@ pub fn build_page_tables(
             tables[parent][leaf_slot] = leaf;
         }
     }
+    validate_page_table_topology(tables, table_physical_addresses, used)?;
     Ok(used)
+}
+
+/// Validate that every intermediate descriptor forms a unique tree inside the used pool.
+pub fn validate_page_table_topology(
+    tables: &[[u64; ENTRIES_PER_TABLE]],
+    table_physical_addresses: &[u64],
+    used_table_count: usize,
+) -> Result<(), PagingError> {
+    if used_table_count == 0
+        || used_table_count > tables.len()
+        || tables.len() != table_physical_addresses.len()
+    {
+        return Err(PagingError::InvalidTableTopology);
+    }
+
+    for parent in 0..used_table_count {
+        for entry in tables[parent] {
+            if entry & VALID == 0 {
+                continue;
+            }
+            if entry & PAGE_DESCRIPTOR == 0
+                || entry & !(OUTPUT_ADDRESS_MASK | VALID | PAGE_DESCRIPTOR) != 0
+            {
+                return Err(PagingError::InvalidTableTopology);
+            }
+            let child_address = entry & OUTPUT_ADDRESS_MASK;
+            let child = table_physical_addresses[..used_table_count]
+                .iter()
+                .position(|address| *address == child_address)
+                .ok_or(PagingError::InvalidTableTopology)?;
+            if child <= parent {
+                return Err(PagingError::InvalidTableTopology);
+            }
+        }
+    }
+
+    for child in 1..used_table_count {
+        let mut references = 0usize;
+        for parent in 0..used_table_count {
+            for entry in tables[parent] {
+                if entry & VALID != 0
+                    && entry & OUTPUT_ADDRESS_MASK == table_physical_addresses[child]
+                {
+                    references = references
+                        .checked_add(1)
+                        .ok_or(PagingError::InvalidTableTopology)?;
+                }
+            }
+        }
+        if references != 1 {
+            return Err(PagingError::InvalidTableTopology);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -424,5 +480,50 @@ mod tests {
             translation_table_indices(0x0001_0000_0000_0000),
             Err(PagingError::NonCanonicalVirtualAddress)
         );
+    } 
+    #[test]
+    fn rejects_page_table_descriptors_outside_the_used_tree() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mapping = PageMapping {
+            virtual_start: 0xffff_0000_0000_0000,
+            physical_start: 0x20_0000,
+            page_count: 1,
+            writable: false,
+            executable: true,
+            attribute_index: 1,
+        };
+        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        assert_eq!(validate_page_table_topology(&tables, &addresses, 4), Ok(()));
+
+        let indexes = translation_table_indices(mapping.virtual_start).unwrap();
+        tables[0][indexes[0]] = 0x9000 | VALID | PAGE_DESCRIPTOR;
+        assert_eq!(
+            validate_page_table_topology(&tables, &addresses, 4),
+            Err(PagingError::InvalidTableTopology)
+        );
     }
+
+    #[test]
+    fn rejects_duplicate_and_unreachable_page_table_pages() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mapping = PageMapping {
+            virtual_start: 0xffff_0000_0000_0000,
+            physical_start: 0x20_0000,
+            page_count: 1,
+            writable: false,
+            executable: true,
+            attribute_index: 1,
+        };
+        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        let indexes = translation_table_indices(mapping.virtual_start).unwrap();
+        let l1 = table_index(&addresses, tables[0][indexes[0]]);
+        tables[l1][indexes[1]] = addresses[3] | VALID | PAGE_DESCRIPTOR;
+        assert_eq!(
+            validate_page_table_topology(&tables, &addresses, 4),
+            Err(PagingError::InvalidTableTopology)
+        );
+    }
+
 }
