@@ -409,7 +409,8 @@ mod tests {
         assert_eq!(
             validate_boot_handoff(
                 architecture::X86_64,
-                0x8800, &valid_info(architecture::AARCH64),
+                0x8800,
+                &valid_info(architecture::AARCH64),
                 &valid_map(),
             ),
             Err(KernelBootError::ArchitectureMismatch {
