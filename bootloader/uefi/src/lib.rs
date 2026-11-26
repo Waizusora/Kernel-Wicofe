@@ -1519,7 +1519,7 @@ mod page_table_pool_tests {
             Err(PageTablePoolError::InvalidRange)
         );
         assert_eq!(
-            validate_page_table_pool_mapping(&[], u64::MAX & !(UEFI_PAGE_SIZE - 1), 1),
+            validate_page_table_pool_mapping(&[], !(UEFI_PAGE_SIZE - 1), 1),
             Err(PageTablePoolError::AddressOverflow)
         );
     }
