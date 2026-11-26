@@ -540,7 +540,7 @@ mod tests {
             validate_page_table_topology(&tables, &addresses, 4),
             Err(PagingError::InvalidTableTopology)
         );
-    } 
+    }
     #[test]
     fn rejects_descriptors_in_unused_pool_pages() {
         let mut tables = [[0u64; ENTRIES_PER_TABLE]; 5];
@@ -565,5 +565,4 @@ mod tests {
             Err(PagingError::InvalidTableTopology)
         );
     }
-
 }
