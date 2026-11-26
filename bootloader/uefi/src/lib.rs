@@ -1502,19 +1502,10 @@ mod page_table_pool_tests {
 
     #[test]
     fn page_table_pool_capacity_covers_self_mapping_boundaries() {
-        for base_capacity in [
-            1,
-            511,
-            512,
-            513,
-            1 << 18,
-            (1 << 18) + 1,
-            1 << 27,
-        ] {
+        for base_capacity in [1, 511, 512, 513, 1 << 18, (1 << 18) + 1, 1 << 27] {
             let capacity = page_table_pool_capacity(base_capacity).unwrap();
-            let maximum_regions_touched = |pages: usize, region_pages: usize| {
-                (pages + region_pages - 2) / region_pages + 1
-            };
+            let maximum_regions_touched =
+                |pages: usize, region_pages: usize| (pages + region_pages - 2) / region_pages + 1;
             let required = base_capacity
                 + maximum_regions_touched(capacity, 1 << 27)
                 + maximum_regions_touched(capacity, 1 << 18)
