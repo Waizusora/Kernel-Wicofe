@@ -1179,8 +1179,7 @@ unsafe fn build_architecture_page_tables(
         let table_count =
             page_table_pool_capacity(base_table_count).ok_or(EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
-        let pool_page_count =
-            u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?;
+        let pool_page_count = u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?;
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
         let pool_mapping = KernelPageMapping {
             physical_start: table_base,
@@ -1308,8 +1307,7 @@ unsafe fn build_architecture_page_tables(
         let table_count =
             page_table_pool_capacity(base_table_count).ok_or(EFI_INVALID_PARAMETER)?;
         // SAFETY: the pool is retained on success and released on any builder failure.
-        let pool_page_count =
-            u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?;
+        let pool_page_count = u64::try_from(table_count).map_err(|_| EFI_INVALID_PARAMETER)?;
         let table_base = unsafe { allocate_page_table_pool(services, table_count)? };
         let pool_mapping = KernelPageMapping {
             physical_start: table_base,
