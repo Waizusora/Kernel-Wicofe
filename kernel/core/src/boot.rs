@@ -383,7 +383,8 @@ mod tests {
         assert_eq!(
             validate_boot_handoff(
                 architecture::X86_64,
-                0x8800, &valid_info(architecture::X86_64),
+                0x8800,
+                &valid_info(architecture::X86_64),
                 &valid_map(),
             ),
             Ok(())
@@ -395,7 +396,8 @@ mod tests {
         assert_eq!(
             validate_boot_handoff(
                 architecture::AARCH64,
-                0x8800, &valid_info(architecture::AARCH64),
+                0x8800,
+                &valid_info(architecture::AARCH64),
                 &valid_map(),
             ),
             Ok(())
