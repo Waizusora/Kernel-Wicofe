@@ -119,7 +119,6 @@ pub fn validate_boot_handoff(
     ValidatedBootHandoff::new(expected_architecture, info, memory_map).map(|_| ())
 }
 
-
 /// Check that a half-open physical range is continuously classified as one
 /// memory kind. The input map has already passed ordering and overlap checks.
 fn range_is_covered_by_kind(
