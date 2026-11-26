@@ -374,7 +374,11 @@ mod tests {
             build_page_tables(&mut tables, &addresses, &[wx]),
             Err(PagingError::WritableExecutable)
         );
-        assert!(tables.iter().all(|table| table.iter().all(|entry| *entry == u64::MAX)));
+        assert!(
+            tables
+                .iter()
+                .all(|table| table.iter().all(|entry| *entry == u64::MAX))
+        );
     }
 
     #[test]
