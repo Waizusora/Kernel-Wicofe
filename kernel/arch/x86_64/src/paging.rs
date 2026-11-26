@@ -231,13 +231,15 @@ pub fn validate_page_table_topology(
         }
     }
 
-    for child_address in table_physical_addresses.iter().take(used_table_count).skip(1) {
+    for child_address in table_physical_addresses
+        .iter()
+        .take(used_table_count)
+        .skip(1)
+    {
         let mut references = 0usize;
         for table in tables.iter().take(used_table_count) {
             for entry in table {
-                if entry & PRESENT != 0
-                    && entry & PHYSICAL_ADDRESS_MASK == *child_address
-                {
+                if entry & PRESENT != 0 && entry & PHYSICAL_ADDRESS_MASK == *child_address {
                     references = references
                         .checked_add(1)
                         .ok_or(PagingError::InvalidTableTopology)?;
