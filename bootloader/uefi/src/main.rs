@@ -1526,6 +1526,77 @@ unsafe fn prepare_page_tables(
                         // SAFETY: only the initialized combined mappings are exposed.
                         let combined_slice =
                             unsafe { core::slice::from_raw_parts(combined, combined_count) };
+
+                        let boot_info_address = prepared_boot_info.info as u64;
+                        wicofe_bootloader_uefi::validate_mapping_coverage(
+                            combined_slice,
+                            boot_info_address,
+                            boot_info_address,
+                            core::mem::size_of::<BootInfo>() as u64,
+                            MAP_READ,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        let map_bytes = prepared_boot_info
+                            .region_capacity
+                            .checked_mul(core::mem::size_of::<MemoryRegion>())
+                            .and_then(|size| u64::try_from(size).ok())
+                            .ok_or(EFI_INVALID_PARAMETER)?;
+                        let map_address = prepared_boot_info.regions as u64;
+                        wicofe_bootloader_uefi::validate_mapping_coverage(
+                            combined_slice,
+                            map_address,
+                            map_address,
+                            map_bytes,
+                            MAP_READ,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        wicofe_bootloader_uefi::validate_mapping_coverage(
+                            combined_slice,
+                            active_stack.physical_start,
+                            active_stack.physical_start,
+                            active_stack.length,
+                            MAP_READ | MAP_WRITE,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        wicofe_bootloader_uefi::validate_mapping_coverage(
+                            combined_slice,
+                            bootstrap_stack.stack_base,
+                            bootstrap_stack.stack_base,
+                            BOOTSTRAP_STACK_LAYOUT.stack_size,
+                            MAP_READ | MAP_WRITE,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        wicofe_bootloader_uefi::validate_mapping_absent(
+                            combined_slice,
+                            bootstrap_stack.allocation_base,
+                            BOOTSTRAP_STACK_LAYOUT.guard_size,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        let kernel_entry_physical = kernel
+                            .physical_base
+                            .checked_add(
+                                kernel.entry.checked_sub(kernel.virtual_base)
+                                    .ok_or(EFI_INVALID_PARAMETER)?,
+                            )
+                            .ok_or(EFI_INVALID_PARAMETER)?;
+                        wicofe_bootloader_uefi::validate_mapping_coverage(
+                            combined_slice,
+                            kernel.entry,
+                            kernel_entry_physical,
+                            1,
+                            MAP_READ | wicofe_bootloader_uefi::MAP_EXECUTE,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+                        #[cfg(target_arch = "x86_64")]
+                        wicofe_bootloader_uefi::validate_mapping_coverage(
+                            combined_slice,
+                            gdt_physical_address,
+                            gdt_physical_address,
+                            UEFI_PAGE_SIZE,
+                            MAP_READ,
+                        )
+                        .map_err(|_| EFI_INVALID_PARAMETER)?;
+
                         unsafe { build_architecture_page_tables(services, combined_slice) }
                     })();
                     // SAFETY: combined was allocated above.

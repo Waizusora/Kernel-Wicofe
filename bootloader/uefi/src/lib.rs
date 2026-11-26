@@ -113,6 +113,114 @@ pub struct KernelPageMapping {
     pub permissions: u32,
 }
 
+/// Errors while proving that a required object is reachable through a mapping plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MappingCoverageError {
+    InvalidRange,
+    InvalidPermissions,
+    AddressOverflow,
+    MissingMapping,
+    PhysicalAddressMismatch,
+    InsufficientPermissions,
+    UnexpectedMapping,
+}
+
+/// Prove a virtual range resolves to the expected contiguous physical range.
+pub fn validate_mapping_coverage(
+    mappings: &[KernelPageMapping],
+    virtual_start: u64,
+    physical_start: u64,
+    length: u64,
+    required_permissions: u32,
+) -> Result<(), MappingCoverageError> {
+    if length == 0 || virtual_start % UEFI_PAGE_SIZE != 0 || physical_start % UEFI_PAGE_SIZE != 0 {
+        return Err(MappingCoverageError::InvalidRange);
+    }
+    mapping_access(required_permissions)
+        .map_err(|_| MappingCoverageError::InvalidPermissions)?;
+    let requested_end = virtual_start
+        .checked_add(length)
+        .ok_or(MappingCoverageError::AddressOverflow)?;
+    physical_start
+        .checked_add(length)
+        .ok_or(MappingCoverageError::AddressOverflow)?;
+
+    let mut cursor = virtual_start;
+    while cursor < requested_end {
+        let mut selected = None;
+        for mapping in mappings {
+            if mapping.page_count == 0
+                || mapping.virtual_start % UEFI_PAGE_SIZE != 0
+                || mapping.physical_start % UEFI_PAGE_SIZE != 0
+            {
+                return Err(MappingCoverageError::InvalidRange);
+            }
+            mapping_access(mapping.permissions)
+                .map_err(|_| MappingCoverageError::InvalidPermissions)?;
+            let size = mapping.page_count
+                .checked_mul(UEFI_PAGE_SIZE)
+                .ok_or(MappingCoverageError::AddressOverflow)?;
+            let end = mapping.virtual_start
+                .checked_add(size)
+                .ok_or(MappingCoverageError::AddressOverflow)?;
+            mapping.physical_start
+                .checked_add(size)
+                .ok_or(MappingCoverageError::AddressOverflow)?;
+            if cursor >= mapping.virtual_start && cursor < end {
+                if selected.is_some() {
+                    return Err(MappingCoverageError::UnexpectedMapping);
+                }
+                selected = Some((mapping, end));
+            }
+        }
+        let (mapping, mapping_end) = selected.ok_or(MappingCoverageError::MissingMapping)?;
+        let offset = cursor - mapping.virtual_start;
+        let actual_physical = mapping.physical_start
+            .checked_add(offset)
+            .ok_or(MappingCoverageError::AddressOverflow)?;
+        let expected_physical = physical_start
+            .checked_add(cursor - virtual_start)
+            .ok_or(MappingCoverageError::AddressOverflow)?;
+        if actual_physical != expected_physical {
+            return Err(MappingCoverageError::PhysicalAddressMismatch);
+        }
+        if mapping.permissions & required_permissions != required_permissions {
+            return Err(MappingCoverageError::InsufficientPermissions);
+        }
+        cursor = requested_end.min(mapping_end);
+    }
+    Ok(())
+}
+
+/// Reject any mapping that intersects a virtual guard or deliberately unmapped range.
+pub fn validate_mapping_absent(
+    mappings: &[KernelPageMapping],
+    virtual_start: u64,
+    length: u64,
+) -> Result<(), MappingCoverageError> {
+    if length == 0 || virtual_start % UEFI_PAGE_SIZE != 0 {
+        return Err(MappingCoverageError::InvalidRange);
+    }
+    let end = virtual_start
+        .checked_add(length)
+        .ok_or(MappingCoverageError::AddressOverflow)?;
+    for mapping in mappings {
+        if mapping.page_count == 0 || mapping.virtual_start % UEFI_PAGE_SIZE != 0 {
+            return Err(MappingCoverageError::InvalidRange);
+        }
+        let mapping_size = mapping.page_count
+            .checked_mul(UEFI_PAGE_SIZE)
+            .ok_or(MappingCoverageError::AddressOverflow)?;
+        let mapping_end = mapping.virtual_start
+            .checked_add(mapping_size)
+            .ok_or(MappingCoverageError::AddressOverflow)?;
+        if virtual_start < mapping_end && mapping.virtual_start < end {
+            return Err(MappingCoverageError::UnexpectedMapping);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MappingPlanError {
     InvalidBase,
@@ -1224,4 +1332,81 @@ mod identity_range_coalescing_tests {
             Err(IdentityMappingError::OutputTooSmall)
         );
     }
+    #[test]
+    fn mapping_coverage_proves_translation_permissions_and_adjacent_ranges() {
+        let mappings = [
+            KernelPageMapping {
+                physical_start: 0x20_0000,
+                virtual_start: 0xffff_ffff_8000_0000,
+                page_count: 1,
+                permissions: MAP_READ,
+            },
+            KernelPageMapping {
+                physical_start: 0x20_1000,
+                virtual_start: 0xffff_ffff_8000_1000,
+                page_count: 1,
+                permissions: MAP_READ | MAP_WRITE,
+            },
+        ];
+        assert_eq!(
+            validate_mapping_coverage(
+                &mappings,
+                0xffff_ffff_8000_0000,
+                0x20_0000,
+                0x2000,
+                MAP_READ,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_mapping_coverage(
+                &mappings,
+                0xffff_ffff_8000_0000,
+                0x20_0000,
+                0x2000,
+                MAP_READ | MAP_WRITE,
+            ),
+            Err(MappingCoverageError::InsufficientPermissions)
+        );
+        assert_eq!(
+            validate_mapping_coverage(
+                &mappings,
+                0xffff_ffff_8000_0000,
+                0x30_0000,
+                0x1000,
+                MAP_READ,
+            ),
+            Err(MappingCoverageError::PhysicalAddressMismatch)
+        );
+    }
+
+    #[test]
+    fn mapping_coverage_rejects_gaps_and_guard_mapping() {
+        let mappings = [KernelPageMapping {
+            physical_start: 0x40_0000,
+            virtual_start: 0xffff_0000_0000_0000,
+            page_count: 1,
+            permissions: MAP_READ | MAP_WRITE,
+        }];
+        assert_eq!(
+            validate_mapping_coverage(
+                &mappings,
+                0xffff_0000_0000_0000,
+                0x40_0000,
+                0x2000,
+                MAP_READ,
+            ),
+            Err(MappingCoverageError::MissingMapping)
+        );
+        assert_eq!(
+            validate_mapping_absent(&mappings, 0xffff_0000_0000_0000, 0x1000),
+            Err(MappingCoverageError::UnexpectedMapping)
+        );
+        assert_eq!(
+            validate_mapping_absent(&mappings, 0xffff_0000_0000_1000, 0x1000),
+            Ok(())
+        );
+    }
+
+
 }
