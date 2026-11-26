@@ -197,7 +197,9 @@ fields, map metadata, map ordering and ranges, kernel image bounds, entry
 bounds, and optional ACPI pointer alignment before using the data. The complete
 physical kernel image range MUST be covered by memory-map entries classified as
 `KERNEL`; a partially reserved or `USABLE` image is rejected before allocator
-construction. The
+construction. The complete backing range named by `memory_map_address` and
+`memory_map_entries` MUST be covered by `BOOT_INFO` entries, so the kernel's
+canonical memory-map storage cannot be returned by its frame allocator. The
 host-side validator checks metadata and an already-accessible map slice; it
 does not make an arbitrary physical address safe to dereference.
 

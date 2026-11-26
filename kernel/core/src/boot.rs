@@ -15,6 +15,7 @@ pub enum KernelBootError {
     InvalidBootInfo(BootInfoError),
     ArchitectureMismatch { expected: u32, actual: u32 },
     KernelImageNotReserved,
+    MemoryMapNotReserved,
 }
 
 /// A boot handoff whose ABI, architecture, and memory-map metadata were checked.
@@ -54,6 +55,23 @@ impl<'a> ValidatedBootHandoff<'a> {
                 expected: expected_architecture,
                 actual: info.architecture,
             });
+        }
+
+        let memory_map_bytes = info
+            .memory_map_entries
+            .checked_mul(u64::from(info.memory_map_entry_size))
+            .ok_or(KernelBootError::MemoryMapNotReserved)?;
+        let memory_map_end = info
+            .memory_map_address
+            .checked_add(memory_map_bytes)
+            .ok_or(KernelBootError::MemoryMapNotReserved)?;
+        if !range_is_covered_by_kind(
+            memory_map,
+            info.memory_map_address,
+            memory_map_end,
+            wicofe_bootloader_common::memory_kind::BOOT_INFO,
+        ) {
+            return Err(KernelBootError::MemoryMapNotReserved);
         }
 
         let kernel_image_end = info
@@ -158,8 +176,14 @@ mod tests {
         BOOT_INFO_MAGIC, BOOT_INFO_VERSION, memory_attribute, memory_kind,
     };
 
-    fn valid_map() -> [MemoryRegion; 3] {
+    fn valid_map() -> [MemoryRegion; 4] {
         [
+            MemoryRegion {
+                physical_start: 0x0000_8000,
+                length: 0x0000_1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
             MemoryRegion {
                 physical_start: 0x0010_0000,
                 length: 0x0010_0000,
@@ -194,7 +218,7 @@ mod tests {
             architecture: architecture_id,
             flags: 0,
             memory_map_address: 0x8000,
-            memory_map_entries: 3,
+            memory_map_entries: 4,
             memory_map_entry_size: core::mem::size_of::<MemoryRegion>() as u32,
             reserved: 0,
             kernel_physical_base: 0x20_0000,
@@ -245,6 +269,17 @@ mod tests {
     }
 
     #[test]
+    fn rejects_memory_map_storage_marked_as_usable_memory() {
+        let info = valid_info(architecture::X86_64);
+        let mut map = valid_map();
+        map[0].kind = memory_kind::USABLE;
+        assert_eq!(
+            validate_boot_handoff(architecture::X86_64, &info, &map),
+            Err(KernelBootError::MemoryMapNotReserved)
+        );
+    }
+
+    #[test]
     fn rejects_kernel_image_marked_as_usable_memory() {
         let info = valid_info(architecture::X86_64);
         let mut map = valid_map();
@@ -259,6 +294,12 @@ mod tests {
     fn rejects_partially_reserved_kernel_image() {
         let info = valid_info(architecture::X86_64);
         let map = [
+            MemoryRegion {
+                physical_start: 0x0000_8000,
+                length: 0x0000_1000,
+                kind: memory_kind::BOOT_INFO,
+                attributes: 0,
+            },
             MemoryRegion {
                 physical_start: 0x0010_0000,
                 length: 0x0010_0000,
@@ -316,7 +357,7 @@ mod tests {
         let mut allocator = handoff.frame_allocator();
 
         assert_eq!(handoff.info().architecture, architecture::X86_64);
-        assert_eq!(handoff.memory_map().len(), 3);
+        assert_eq!(handoff.memory_map().len(), 4);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0040_0000);
     }
 }
