@@ -87,6 +87,42 @@ pub fn translation_table_indices(virtual_address: u64) -> Result<[usize; 4], Pag
     ])
 }
 
+/// Validate a complete mapping before sizing or mutating the table pool.
+fn validate_mapping(mapping: &PageMapping) -> Result<u64, PagingError> {
+    if mapping.page_count == 0 {
+        return Err(PagingError::AddressOverflow);
+    }
+    if mapping.writable && mapping.executable {
+        return Err(PagingError::WritableExecutable);
+    }
+    if mapping.virtual_start % PAGE_SIZE != 0 || mapping.physical_start % PAGE_SIZE != 0 {
+        return Err(PagingError::MisalignedAddress);
+    }
+    let last_offset = (mapping.page_count - 1)
+        .checked_mul(PAGE_SIZE)
+        .ok_or(PagingError::AddressOverflow)?;
+    let last_virtual = mapping
+        .virtual_start
+        .checked_add(last_offset)
+        .ok_or(PagingError::AddressOverflow)?;
+    let last_output = mapping
+        .physical_start
+        .checked_add(last_offset)
+        .ok_or(PagingError::AddressOverflow)?;
+    translation_table_indices(mapping.virtual_start)?;
+    translation_table_indices(last_virtual)?;
+    if mapping.virtual_start >> 48 != last_virtual >> 48 {
+        return Err(PagingError::NonCanonicalVirtualAddress);
+    }
+    encode_page(
+        last_output,
+        mapping.writable,
+        mapping.executable,
+        mapping.attribute_index,
+    )?;
+    Ok(last_virtual)
+}
+
 /// Return a safe upper bound for the number of 4 KiB tables needed.
 ///
 /// The count includes the root table and every intermediate table touched by
@@ -96,21 +132,7 @@ pub fn translation_table_indices(virtual_address: u64) -> Result<[usize; 4], Pag
 pub fn required_table_capacity(mappings: &[PageMapping]) -> Result<usize, PagingError> {
     let mut capacity = 1usize;
     for mapping in mappings {
-        if mapping.page_count == 0 {
-            return Err(PagingError::AddressOverflow);
-        }
-        if mapping.virtual_start % PAGE_SIZE != 0 {
-            return Err(PagingError::MisalignedAddress);
-        }
-        let last_offset = (mapping.page_count - 1)
-            .checked_mul(PAGE_SIZE)
-            .ok_or(PagingError::AddressOverflow)?;
-        let last_address = mapping
-            .virtual_start
-            .checked_add(last_offset)
-            .ok_or(PagingError::AddressOverflow)?;
-        translation_table_indices(mapping.virtual_start)?;
-        translation_table_indices(last_address)?;
+        let last_address = validate_mapping(mapping)?;
         for shift in [39_u32, 30, 21] {
             let first = mapping.virtual_start >> shift;
             let last = last_address >> shift;
@@ -142,21 +164,15 @@ pub fn build_page_tables(
             return Err(PagingError::InvalidTablePool);
         }
     }
+    for mapping in mappings {
+        validate_mapping(mapping)?;
+    }
     for table in tables.iter_mut() {
         table.fill(0);
     }
 
     let mut used = 1usize;
     for mapping in mappings {
-        if mapping.page_count == 0 {
-            return Err(PagingError::AddressOverflow);
-        }
-        if mapping.writable && mapping.executable {
-            return Err(PagingError::WritableExecutable);
-        }
-        if mapping.virtual_start % PAGE_SIZE != 0 || mapping.physical_start % PAGE_SIZE != 0 {
-            return Err(PagingError::MisalignedAddress);
-        }
         for page in 0..mapping.page_count {
             let offset = page
                 .checked_mul(PAGE_SIZE)
@@ -325,6 +341,40 @@ mod tests {
         assert_eq!(text & PXN, 0);
         assert_ne!(data & PXN, 0);
         assert_eq!(data & AP_EL1_READ_ONLY, 0);
+    }
+
+    #[test]
+    fn validates_mapping_before_sizing_or_clearing_tables() {
+        let wx = PageMapping {
+            virtual_start: 0xffff_0000_0000_0000,
+            physical_start: 0x20_0000,
+            page_count: 1,
+            writable: true,
+            executable: true,
+            attribute_index: 0,
+        };
+        assert_eq!(
+            required_table_capacity(&[wx]),
+            Err(PagingError::WritableExecutable)
+        );
+        let invalid_attribute = PageMapping {
+            writable: false,
+            executable: false,
+            attribute_index: 8,
+            ..wx
+        };
+        assert_eq!(
+            required_table_capacity(&[invalid_attribute]),
+            Err(PagingError::InvalidAttributeIndex)
+        );
+
+        let mut tables = [[u64::MAX; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        assert_eq!(
+            build_page_tables(&mut tables, &addresses, &[wx]),
+            Err(PagingError::WritableExecutable)
+        );
+        assert!(tables.iter().all(|table| table.iter().all(|entry| *entry == u64::MAX)));
     }
 
     #[test]
