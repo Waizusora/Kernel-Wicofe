@@ -1188,12 +1188,8 @@ unsafe fn build_architecture_page_tables(
             executable: false,
         };
         let converted = &output[..mapping_capacity];
-        wicofe_bootloader_uefi::validate_page_table_pool_mapping(
-            mappings,
-            table_base,
-            table_count,
-        )
-        .map_err(|_| EFI_INVALID_PARAMETER)?;
+        wicofe_bootloader_uefi::validate_page_table_pool_mapping(mappings, table_base, table_count)
+            .map_err(|_| EFI_INVALID_PARAMETER)?;
         let required = wicofe_kernel_x86_64::paging::required_table_capacity(converted)
             .map_err(|_| EFI_INVALID_PARAMETER)?;
         if required > table_count {

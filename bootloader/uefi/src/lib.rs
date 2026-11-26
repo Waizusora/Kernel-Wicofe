@@ -1475,17 +1475,13 @@ mod identity_range_coalescing_tests {
     }
 }
 
-
 #[cfg(test)]
 mod page_table_pool_tests {
     use super::*;
 
     #[test]
     fn accepts_pool_when_existing_mappings_do_not_alias_it() {
-        assert_eq!(
-            validate_page_table_pool_mapping(&[], 0x80_0000, 4),
-            Ok(())
-        );
+        assert_eq!(validate_page_table_pool_mapping(&[], 0x80_0000, 4), Ok(()));
     }
 
     #[test]
