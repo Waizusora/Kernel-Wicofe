@@ -158,7 +158,7 @@ mod tests {
         BOOT_INFO_MAGIC, BOOT_INFO_VERSION, memory_attribute, memory_kind,
     };
 
-    fn valid_map() -> [MemoryRegion; 2] {
+    fn valid_map() -> [MemoryRegion; 3] {
         [
             MemoryRegion {
                 physical_start: 0x0010_0000,
