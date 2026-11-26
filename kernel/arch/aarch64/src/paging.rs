@@ -277,6 +277,14 @@ pub fn validate_page_table_topology(
             return Err(PagingError::InvalidTableTopology);
         }
     }
+    if tables
+        .iter()
+        .skip(used_table_count)
+        .any(|table| table.iter().any(|entry| *entry != 0))
+    {
+        return Err(PagingError::InvalidTableTopology);
+    }
+
     Ok(())
 }
 
@@ -532,5 +540,30 @@ mod tests {
             validate_page_table_topology(&tables, &addresses, 4),
             Err(PagingError::InvalidTableTopology)
         );
+    } 
+    #[test]
+    fn rejects_descriptors_in_unused_pool_pages() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 5];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000, 0x5000];
+        let mapping = PageMapping {
+            virtual_start: 0xffff_0000_0000_0000,
+            physical_start: 0x20_0000,
+            page_count: 1,
+            writable: false,
+            executable: true,
+            attribute_index: 1,
+        };
+        assert_eq!(
+            build_page_tables(&mut tables, &addresses, &[mapping]),
+            Ok(4)
+        );
+        assert_eq!(validate_page_table_topology(&tables, &addresses, 4), Ok(()));
+
+        tables[4][0] = VALID | PAGE_DESCRIPTOR;
+        assert_eq!(
+            validate_page_table_topology(&tables, &addresses, 4),
+            Err(PagingError::InvalidTableTopology)
+        );
     }
+
 }
