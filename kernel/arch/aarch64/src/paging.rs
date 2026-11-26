@@ -480,7 +480,7 @@ mod tests {
             translation_table_indices(0x0001_0000_0000_0000),
             Err(PagingError::NonCanonicalVirtualAddress)
         );
-    } 
+    }
     #[test]
     fn rejects_page_table_descriptors_outside_the_used_tree() {
         let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
