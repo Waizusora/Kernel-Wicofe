@@ -14,6 +14,7 @@ use wicofe_bootloader_common::{
 pub enum KernelBootError {
     InvalidBootInfo(BootInfoError),
     ArchitectureMismatch { expected: u32, actual: u32 },
+    KernelImageNotReserved,
 }
 
 /// A boot handoff whose ABI, architecture, and memory-map metadata were checked.
@@ -53,6 +54,19 @@ impl<'a> ValidatedBootHandoff<'a> {
                 expected: expected_architecture,
                 actual: info.architecture,
             });
+        }
+
+        let kernel_image_end = info
+            .kernel_physical_base
+            .checked_add(info.kernel_image_size)
+            .ok_or(KernelBootError::KernelImageNotReserved)?;
+        if !range_is_covered_by_kind(
+            memory_map,
+            info.kernel_physical_base,
+            kernel_image_end,
+            wicofe_bootloader_common::memory_kind::KERNEL,
+        ) {
+            return Err(KernelBootError::KernelImageNotReserved);
         }
 
         Ok(Self { info, memory_map })
@@ -105,6 +119,39 @@ pub fn validate_boot_handoff(
     ValidatedBootHandoff::new(expected_architecture, info, memory_map).map(|_| ())
 }
 
+
+/// Check that a half-open physical range is continuously classified as one
+/// memory kind. The input map has already passed ordering and overlap checks.
+fn range_is_covered_by_kind(
+    memory_map: &[MemoryRegion],
+    start: u64,
+    end: u64,
+    expected_kind: u32,
+) -> bool {
+    if start >= end {
+        return false;
+    }
+
+    let mut cursor = start;
+    for region in memory_map {
+        let region_end = match region.physical_start.checked_add(region.length) {
+            Some(value) => value,
+            None => return false,
+        };
+        if region_end <= cursor {
+            continue;
+        }
+        if region.physical_start > cursor || region.kind != expected_kind {
+            return false;
+        }
+        cursor = region_end.min(end);
+        if cursor == end {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +169,12 @@ mod tests {
             },
             MemoryRegion {
                 physical_start: 0x0020_0000,
+                length: 0x0020_0000,
+                kind: memory_kind::KERNEL,
+                attributes: memory_attribute::CACHE_WRITE_BACK,
+            },
+            MemoryRegion {
+                physical_start: 0x0040_0000,
                 length: 0x0040_0000,
                 kind: memory_kind::USABLE,
                 attributes: memory_attribute::CACHE_WRITE_BACK,
@@ -193,6 +246,46 @@ mod tests {
     }
 
     #[test]
+    fn rejects_kernel_image_marked_as_usable_memory() {
+        let info = valid_info(architecture::X86_64);
+        let mut map = valid_map();
+        map[1].kind = memory_kind::USABLE;
+        assert_eq!(
+            validate_boot_handoff(architecture::X86_64, &info, &map),
+            Err(KernelBootError::KernelImageNotReserved)
+        );
+    }
+
+    #[test]
+    fn rejects_partially_reserved_kernel_image() {
+        let info = valid_info(architecture::X86_64);
+        let map = [
+            MemoryRegion {
+                physical_start: 0x0010_0000,
+                length: 0x0010_0000,
+                kind: memory_kind::RESERVED,
+                attributes: 0,
+            },
+            MemoryRegion {
+                physical_start: 0x0020_0000,
+                length: 0x0010_0000,
+                kind: memory_kind::KERNEL,
+                attributes: memory_attribute::CACHE_WRITE_BACK,
+            },
+            MemoryRegion {
+                physical_start: 0x0030_0000,
+                length: 0x0050_0000,
+                kind: memory_kind::USABLE,
+                attributes: memory_attribute::CACHE_WRITE_BACK,
+            },
+        ];
+        assert_eq!(
+            validate_boot_handoff(architecture::X86_64, &info, &map),
+            Err(KernelBootError::KernelImageNotReserved)
+        );
+    }
+
+    #[test]
     fn rejects_invalid_boot_info_before_architecture_acceptance() {
         let mut info = valid_info(architecture::X86_64);
         info.magic = 0;
@@ -213,7 +306,7 @@ mod tests {
         let mut allocator = handoff.bitmap_frame_allocator(&[], &mut bitmap).unwrap();
 
         assert_eq!(allocator.frame_count(), 1024);
-        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0020_0000);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0040_0000);
     }
 
     #[test]
@@ -225,6 +318,6 @@ mod tests {
 
         assert_eq!(handoff.info().architecture, architecture::X86_64);
         assert_eq!(handoff.memory_map().len(), 2);
-        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0020_0000);
+        assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0040_0000);
     }
 }
