@@ -194,7 +194,7 @@ mod tests {
             architecture: architecture_id,
             flags: 0,
             memory_map_address: 0x8000,
-            memory_map_entries: 2,
+            memory_map_entries: 3,
             memory_map_entry_size: core::mem::size_of::<MemoryRegion>() as u32,
             reserved: 0,
             kernel_physical_base: 0x20_0000,
