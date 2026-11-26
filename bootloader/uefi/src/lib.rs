@@ -107,6 +107,32 @@ pub enum PageTablePoolError {
     AddressOverflow,
     OverlappingVirtualMapping,
     PhysicalAlias,
+    RootAddressMismatch,
+    InvalidUsedTableCount,
+}
+
+/// Validate the root address and used-table count for a prepared page-table pool.
+pub fn validate_page_table_pool_state(
+    root_physical_address: u64,
+    pool_physical_address: u64,
+    allocated_page_count: usize,
+    used_table_count: usize,
+) -> Result<(), PageTablePoolError> {
+    let layout = page_table_allocation_layout(allocated_page_count)
+        .ok_or(PageTablePoolError::InvalidRange)?;
+    if pool_physical_address == 0 || pool_physical_address % UEFI_PAGE_SIZE != 0 {
+        return Err(PageTablePoolError::InvalidRange);
+    }
+    pool_physical_address
+        .checked_add(layout.allocation_size)
+        .ok_or(PageTablePoolError::AddressOverflow)?;
+    if root_physical_address != pool_physical_address {
+        return Err(PageTablePoolError::RootAddressMismatch);
+    }
+    if used_table_count == 0 || used_table_count > allocated_page_count {
+        return Err(PageTablePoolError::InvalidUsedTableCount);
+    }
+    Ok(())
 }
 
 /// Validate that an identity-mapped page-table pool can be appended safely.
@@ -1527,6 +1553,43 @@ mod page_table_pool_tests {
                 allocation_size: 4 * UEFI_PAGE_SIZE,
                 allocation_pages: 4,
             })
+        );
+    }
+
+    #[test]
+    fn validates_page_table_root_and_used_count() {
+        assert_eq!(
+            validate_page_table_pool_state(0x80_0000, 0x80_0000, 4, 4),
+            Ok(())
+        );
+        assert_eq!(
+            validate_page_table_pool_state(0x80_1000, 0x80_0000, 4, 4),
+            Err(PageTablePoolError::RootAddressMismatch)
+        );
+        assert_eq!(
+            validate_page_table_pool_state(0x80_0000, 0x80_0000, 4, 0),
+            Err(PageTablePoolError::InvalidUsedTableCount)
+        );
+        assert_eq!(
+            validate_page_table_pool_state(0x80_0000, 0x80_0000, 4, 5),
+            Err(PageTablePoolError::InvalidUsedTableCount)
+        );
+        assert_eq!(
+            validate_page_table_pool_state(0x80_0000, 0, 4, 1),
+            Err(PageTablePoolError::InvalidRange)
+        );
+        assert_eq!(
+            validate_page_table_pool_state(0x80_0000, 0x80_0001, 4, 1),
+            Err(PageTablePoolError::InvalidRange)
+        );
+        assert_eq!(
+            validate_page_table_pool_state(
+                0xffff_ffff_ffff_f000,
+                0xffff_ffff_ffff_f000,
+                1,
+                1
+            ),
+            Err(PageTablePoolError::AddressOverflow)
         );
     }
 

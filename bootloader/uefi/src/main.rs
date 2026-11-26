@@ -22,7 +22,7 @@ use wicofe_bootloader_uefi::{
     coalesce_identity_mapping_ranges, coalesce_memory_reservations, decode_uefi_memory_descriptors,
     kernel_allocation_layout, page_table_allocation_layout, page_table_pool_capacity,
     plan_combined_page_mappings, plan_kernel_page_mappings, plan_pe_identity_mappings,
-    translate_uefi_memory_map, validate_active_stack_mapping,
+    translate_uefi_memory_map, validate_active_stack_mapping, validate_page_table_pool_state,
 };
 
 type Status = usize;
@@ -1252,11 +1252,18 @@ unsafe fn build_architecture_page_tables(
                     converted,
                 )
                 .map_err(|_| EFI_INVALID_PARAMETER)?;
-                if used == 0 || used > table_count {
-                    return Err(EFI_INVALID_PARAMETER);
-                }
+                let root_physical_address = *physical_addresses
+                    .first()
+                    .ok_or(EFI_INVALID_PARAMETER)?;
+                validate_page_table_pool_state(
+                    root_physical_address,
+                    table_base,
+                    table_count,
+                    used,
+                )
+                .map_err(|_| EFI_INVALID_PARAMETER)?;
                 Ok(PreparedPageTables {
-                    root_physical_address: table_base,
+                    root_physical_address,
                     used_table_count: used,
                     bootstrap_stack_base: 0,
                     bootstrap_stack_top: 0,
@@ -1381,11 +1388,18 @@ unsafe fn build_architecture_page_tables(
                     converted,
                 )
                 .map_err(|_| EFI_INVALID_PARAMETER)?;
-                if used == 0 || used > table_count {
-                    return Err(EFI_INVALID_PARAMETER);
-                }
+                let root_physical_address = *physical_addresses
+                    .first()
+                    .ok_or(EFI_INVALID_PARAMETER)?;
+                validate_page_table_pool_state(
+                    root_physical_address,
+                    table_base,
+                    table_count,
+                    used,
+                )
+                .map_err(|_| EFI_INVALID_PARAMETER)?;
                 Ok(PreparedPageTables {
-                    root_physical_address: table_base,
+                    root_physical_address,
                     used_table_count: used,
                     bootstrap_stack_base: 0,
                     bootstrap_stack_top: 0,
