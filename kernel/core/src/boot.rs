@@ -536,7 +536,9 @@ mod tests {
         let mut bitmap = [0u64; 16];
 
         assert_eq!(
-            handoff.bitmap_frame_allocator(0x0040_0000, &[], &mut bitmap).err(),
+            handoff
+                .bitmap_frame_allocator(0x0040_0000, &[], &mut bitmap)
+                .err(),
             Some(BitmapAllocatorError::BitmapStorageNotReserved)
         );
     }
@@ -549,11 +551,15 @@ mod tests {
         let mut bitmap = [0u64; 16];
 
         assert_eq!(
-            handoff.bitmap_frame_allocator(0x200101, &[], &mut bitmap).err(),
+            handoff
+                .bitmap_frame_allocator(0x200101, &[], &mut bitmap)
+                .err(),
             Some(BitmapAllocatorError::BitmapStorageNotReserved)
         );
         assert_eq!(
-            handoff.bitmap_frame_allocator(u64::MAX - 7, &[], &mut bitmap).err(),
+            handoff
+                .bitmap_frame_allocator(u64::MAX - 7, &[], &mut bitmap)
+                .err(),
             Some(BitmapAllocatorError::AddressOverflow)
         );
     }
