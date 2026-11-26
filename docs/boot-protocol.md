@@ -199,7 +199,7 @@ physical kernel image range MUST be covered by memory-map entries classified as
 `KERNEL`; a partially reserved or `USABLE` image is rejected before allocator
 construction. The complete backing range named by `memory_map_address` and
 `memory_map_entries` MUST be covered by `BOOT_INFO` entries, so the kernel's
-canonical memory-map storage cannot be returned by its frame allocator. The
+canonical memory-map storage cannot be returned by its frame allocator. The physical range `[boot_info_physical_address, boot_info_physical_address + sizeof(BootInfo))` MUST also be covered by `BOOT_INFO` entries. Kernel validation receives this physical address as an explicit argument, separate from the mapped Rust reference; it MUST NOT infer physical placement from a virtual pointer. The
 host-side validator checks metadata and an already-accessible map slice; it
 does not make an arbitrary physical address safe to dereference.
 

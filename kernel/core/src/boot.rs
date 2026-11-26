@@ -16,6 +16,7 @@ pub enum KernelBootError {
     ArchitectureMismatch { expected: u32, actual: u32 },
     KernelImageNotReserved,
     MemoryMapNotReserved,
+    BootInfoNotReserved,
 }
 
 /// A boot handoff whose ABI, architecture, and memory-map metadata were checked.
@@ -36,10 +37,26 @@ impl<'a> ValidatedBootHandoff<'a> {
     /// The supplied memory map must already be safely accessible.
     pub fn new(
         expected_architecture: u32,
+        boot_info_physical_address: u64,
         info: &'a BootInfo,
         memory_map: &'a [MemoryRegion],
     ) -> Result<Self, KernelBootError> {
         validate_boot_info(info, memory_map).map_err(KernelBootError::InvalidBootInfo)?;
+
+        let boot_info_end = boot_info_physical_address
+            .checked_add(core::mem::size_of::<BootInfo>() as u64)
+            .ok_or(KernelBootError::BootInfoNotReserved)?;
+        if boot_info_physical_address == 0
+            || boot_info_physical_address % core::mem::align_of::<BootInfo>() as u64 != 0
+            || !range_is_covered_by_kind(
+                memory_map,
+                boot_info_physical_address,
+                boot_info_end,
+                wicofe_bootloader_common::memory_kind::BOOT_INFO,
+            )
+        {
+            return Err(KernelBootError::BootInfoNotReserved);
+        }
 
         if expected_architecture != architecture::X86_64
             && expected_architecture != architecture::AARCH64
@@ -131,10 +148,17 @@ impl<'a> ValidatedBootHandoff<'a> {
 /// needs to retain the validated references and construct memory services.
 pub fn validate_boot_handoff(
     expected_architecture: u32,
+    boot_info_physical_address: u64,
     info: &BootInfo,
     memory_map: &[MemoryRegion],
 ) -> Result<(), KernelBootError> {
-    ValidatedBootHandoff::new(expected_architecture, info, memory_map).map(|_| ())
+    ValidatedBootHandoff::new(
+        expected_architecture,
+        boot_info_physical_address,
+        info,
+        memory_map,
+    )
+    .map(|_| ())
 }
 
 /// Check that a half-open physical range is continuously classified as one
@@ -328,11 +352,38 @@ mod tests {
     }
 
     #[test]
+    fn rejects_boot_info_not_covered_by_boot_info_memory() {
+        let info = valid_info(architecture::X86_64);
+        let mut map = valid_map();
+        map[0].kind = memory_kind::USABLE;
+
+        assert_eq!(
+            validate_boot_handoff(architecture::X86_64, 0x8800, &info, &map),
+            Err(KernelBootError::BootInfoNotReserved)
+        );
+    }
+
+    #[test]
+    fn rejects_misaligned_or_overflowing_boot_info_physical_address() {
+        let info = valid_info(architecture::X86_64);
+        let map = valid_map();
+
+        assert_eq!(
+            validate_boot_handoff(architecture::X86_64, 0x8801, &info, &map),
+            Err(KernelBootError::BootInfoNotReserved)
+        );
+        assert_eq!(
+            validate_boot_handoff(architecture::X86_64, u64::MAX - 7, &info, &map),
+            Err(KernelBootError::BootInfoNotReserved)
+        );
+    }
+
+    #[test]
     fn accepts_matching_x86_64_handoff() {
         assert_eq!(
             validate_boot_handoff(
                 architecture::X86_64,
-                &valid_info(architecture::X86_64),
+                0x8800, &valid_info(architecture::X86_64),
                 &valid_map(),
             ),
             Ok(())
@@ -344,7 +395,7 @@ mod tests {
         assert_eq!(
             validate_boot_handoff(
                 architecture::AARCH64,
-                &valid_info(architecture::AARCH64),
+                0x8800, &valid_info(architecture::AARCH64),
                 &valid_map(),
             ),
             Ok(())
@@ -356,7 +407,7 @@ mod tests {
         assert_eq!(
             validate_boot_handoff(
                 architecture::X86_64,
-                &valid_info(architecture::AARCH64),
+                0x8800, &valid_info(architecture::AARCH64),
                 &valid_map(),
             ),
             Err(KernelBootError::ArchitectureMismatch {
@@ -372,7 +423,7 @@ mod tests {
         let mut map = valid_map();
         map[0].kind = memory_kind::USABLE;
         assert_eq!(
-            validate_boot_handoff(architecture::X86_64, &info, &map),
+            validate_boot_handoff(architecture::X86_64, 0x8800, &info, &map),
             Err(KernelBootError::MemoryMapNotReserved)
         );
     }
@@ -383,7 +434,7 @@ mod tests {
         let mut map = valid_map();
         map[2].kind = memory_kind::USABLE;
         assert_eq!(
-            validate_boot_handoff(architecture::X86_64, &info, &map),
+            validate_boot_handoff(architecture::X86_64, 0x8800, &info, &map),
             Err(KernelBootError::KernelImageNotReserved)
         );
     }
@@ -418,7 +469,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            validate_boot_handoff(architecture::X86_64, &info, &map),
+            validate_boot_handoff(architecture::X86_64, 0x8800, &info, &map),
             Err(KernelBootError::KernelImageNotReserved)
         );
     }
@@ -428,7 +479,7 @@ mod tests {
         let mut info = valid_info(architecture::X86_64);
         info.magic = 0;
         assert_eq!(
-            validate_boot_handoff(architecture::X86_64, &info, &valid_map()),
+            validate_boot_handoff(architecture::X86_64, 0x8800, &info, &valid_map()),
             Err(KernelBootError::InvalidBootInfo(
                 BootInfoError::InvalidMagic
             ))
@@ -439,7 +490,7 @@ mod tests {
     fn validated_handoff_initializes_bitmap_allocator() {
         let info = valid_info(architecture::X86_64);
         let map = valid_map();
-        let handoff = ValidatedBootHandoff::new(architecture::X86_64, &info, &map).unwrap();
+        let handoff = ValidatedBootHandoff::new(architecture::X86_64, 0x8800, &info, &map).unwrap();
         let mut bitmap = [0u64; 16];
         let mut allocator = handoff.bitmap_frame_allocator(&[], &mut bitmap).unwrap();
 
@@ -451,7 +502,7 @@ mod tests {
     fn validated_handoff_provides_allocator_for_canonical_map() {
         let info = valid_info(architecture::X86_64);
         let map = valid_map();
-        let handoff = ValidatedBootHandoff::new(architecture::X86_64, &info, &map).unwrap();
+        let handoff = ValidatedBootHandoff::new(architecture::X86_64, 0x8800, &info, &map).unwrap();
         let mut allocator = handoff.frame_allocator();
 
         assert_eq!(handoff.info().architecture, architecture::X86_64);
