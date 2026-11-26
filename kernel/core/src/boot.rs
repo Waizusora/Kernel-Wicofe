@@ -354,8 +354,7 @@ mod tests {
     #[test]
     fn rejects_boot_info_not_covered_by_boot_info_memory() {
         let info = valid_info(architecture::X86_64);
-        let mut map = valid_map();
-        map[0].kind = memory_kind::USABLE;
+        let map = valid_map();
 
         assert_eq!(
             validate_boot_handoff(architecture::X86_64, 0x100000, &info, &map),
