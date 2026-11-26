@@ -99,6 +99,67 @@ pub fn page_table_pool_capacity(base_table_capacity: usize) -> Option<usize> {
     }
 }
 
+/// Errors while validating the dedicated page-table pool mapping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PageTablePoolError {
+    InvalidRange,
+    InvalidPermissions,
+    AddressOverflow,
+    OverlappingVirtualMapping,
+    PhysicalAlias,
+}
+
+/// Validate that an identity-mapped page-table pool can be appended safely.
+///
+/// The caller appends exactly one mapping at `physical_start` with
+/// `page_count` pages and READ|WRITE permissions. Existing mappings must not
+/// overlap its virtual range or alias any of its physical frames.
+pub fn validate_page_table_pool_mapping(
+    mappings: &[KernelPageMapping],
+    physical_start: u64,
+    page_count: usize,
+) -> Result<(), PageTablePoolError> {
+    let layout =
+        page_table_allocation_layout(page_count).ok_or(PageTablePoolError::InvalidRange)?;
+    if physical_start == 0 || physical_start % UEFI_PAGE_SIZE != 0 {
+        return Err(PageTablePoolError::InvalidRange);
+    }
+    let pool_end = physical_start
+        .checked_add(layout.allocation_size)
+        .ok_or(PageTablePoolError::AddressOverflow)?;
+
+    for mapping in mappings {
+        if mapping.page_count == 0
+            || mapping.virtual_start % UEFI_PAGE_SIZE != 0
+            || mapping.physical_start % UEFI_PAGE_SIZE != 0
+        {
+            return Err(PageTablePoolError::InvalidRange);
+        }
+        mapping_access(mapping.permissions).map_err(|_| PageTablePoolError::InvalidPermissions)?;
+        let size = mapping
+            .page_count
+            .checked_mul(UEFI_PAGE_SIZE)
+            .ok_or(PageTablePoolError::AddressOverflow)?;
+        let virtual_end = mapping
+            .virtual_start
+            .checked_add(size)
+            .ok_or(PageTablePoolError::AddressOverflow)?;
+        let physical_end = mapping
+            .physical_start
+            .checked_add(size)
+            .ok_or(PageTablePoolError::AddressOverflow)?;
+
+        if mapping.virtual_start < pool_end && physical_start < virtual_end {
+            return Err(PageTablePoolError::OverlappingVirtualMapping);
+        }
+        if mapping.physical_start < pool_end && physical_start < physical_end {
+            return Err(PageTablePoolError::PhysicalAlias);
+        }
+    }
+
+    Ok(())
+}
+
 /// Hardware-independent permission bits for a 4 KiB kernel mapping.
 pub const MAP_READ: u32 = 1 << 0;
 pub const MAP_WRITE: u32 = 1 << 1;
@@ -1410,6 +1471,60 @@ mod identity_range_coalescing_tests {
         assert_eq!(
             validate_mapping_absent(&mappings, 0xffff_0000_0000_1000, 0x1000),
             Ok(())
+        );
+    }
+}
+
+
+#[cfg(test)]
+mod page_table_pool_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_pool_when_existing_mappings_do_not_alias_it() {
+        assert_eq!(
+            validate_page_table_pool_mapping(&[], 0x80_0000, 4),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rejects_virtual_overlap_with_pool() {
+        let mappings = [KernelPageMapping {
+            physical_start: 0x90_0000,
+            virtual_start: 0x80_1000,
+            page_count: 1,
+            permissions: MAP_READ,
+        }];
+        assert_eq!(
+            validate_page_table_pool_mapping(&mappings, 0x80_0000, 4),
+            Err(PageTablePoolError::OverlappingVirtualMapping)
+        );
+    }
+
+    #[test]
+    fn rejects_physical_alias_of_pool_frames() {
+        let mappings = [KernelPageMapping {
+            physical_start: 0x80_1000,
+            virtual_start: 0xffff_8000_0000_0000,
+            page_count: 1,
+            permissions: MAP_READ,
+        }];
+        assert_eq!(
+            validate_page_table_pool_mapping(&mappings, 0x80_0000, 4),
+            Err(PageTablePoolError::PhysicalAlias)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_pool_address_and_range_overflow() {
+        assert_eq!(
+            validate_page_table_pool_mapping(&[], 0, 4),
+            Err(PageTablePoolError::InvalidRange)
+        );
+        assert_eq!(
+            validate_page_table_pool_mapping(&[], u64::MAX & !(UEFI_PAGE_SIZE - 1), 1),
+            Err(PageTablePoolError::AddressOverflow)
         );
     }
 }

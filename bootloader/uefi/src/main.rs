@@ -1188,6 +1188,12 @@ unsafe fn build_architecture_page_tables(
             executable: false,
         };
         let converted = &output[..mapping_capacity];
+        wicofe_bootloader_uefi::validate_page_table_pool_mapping(
+            mappings,
+            table_base,
+            table_count,
+        )
+        .map_err(|_| EFI_INVALID_PARAMETER)?;
         let required = wicofe_kernel_x86_64::paging::required_table_capacity(converted)
             .map_err(|_| EFI_INVALID_PARAMETER)?;
         if required > table_count {
@@ -1229,6 +1235,9 @@ unsafe fn build_architecture_page_tables(
                     converted,
                 )
                 .map_err(|_| EFI_INVALID_PARAMETER)?;
+                if used == 0 || used > table_count {
+                    return Err(EFI_INVALID_PARAMETER);
+                }
                 Ok(PreparedPageTables {
                     root_physical_address: table_base,
                     used_table_count: used,
@@ -1291,6 +1300,12 @@ unsafe fn build_architecture_page_tables(
             attribute_index: 0,
         };
         let converted = &output[..mapping_capacity];
+        wicofe_bootloader_uefi::validate_page_table_pool_mapping(
+            mappings,
+            table_base,
+            table_count,
+        )
+        .map_err(|_| EFI_INVALID_PARAMETER)?;
         let required = wicofe_kernel_aarch64::paging::required_table_capacity(converted)
             .map_err(|_| EFI_INVALID_PARAMETER)?;
         if required > table_count {
@@ -1332,6 +1347,9 @@ unsafe fn build_architecture_page_tables(
                     converted,
                 )
                 .map_err(|_| EFI_INVALID_PARAMETER)?;
+                if used == 0 || used > table_count {
+                    return Err(EFI_INVALID_PARAMETER);
+                }
                 Ok(PreparedPageTables {
                     root_physical_address: table_base,
                     used_table_count: used,
