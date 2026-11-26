@@ -76,7 +76,6 @@ impl<'a> ValidatedBootHandoff<'a> {
             return Err(KernelBootError::MemoryMapNotReserved);
         }
 
-
         let boot_info_end = boot_info_physical_address
             .checked_add(core::mem::size_of::<BootInfo>() as u64)
             .ok_or(KernelBootError::BootInfoNotReserved)?;
