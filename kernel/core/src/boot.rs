@@ -124,12 +124,38 @@ impl<'a> ValidatedBootHandoff<'a> {
     /// that is not available to the allocator (normally reserved by the WBL map).
     pub fn bitmap_frame_allocator<'b>(
         &'b self,
+        bitmap_physical_address: u64,
         reservations: &'b [PhysicalRange],
         bitmap: &'b mut [u64],
     ) -> Result<BitmapFrameAllocator<'b>, BitmapAllocatorError>
     where
         'a: 'b,
     {
+        let bitmap_bytes = u64::try_from(bitmap.len())
+            .ok()
+            .and_then(|words| words.checked_mul(core::mem::size_of::<u64>() as u64))
+            .ok_or(BitmapAllocatorError::AddressOverflow)?;
+        let bitmap_end = bitmap_physical_address
+            .checked_add(bitmap_bytes)
+            .ok_or(BitmapAllocatorError::AddressOverflow)?;
+        let bitmap_is_reserved = bitmap_physical_address != 0
+            && bitmap_bytes != 0
+            && bitmap_physical_address % core::mem::align_of::<u64>() as u64 == 0
+            && (range_is_covered_by_kind(
+                self.memory_map,
+                bitmap_physical_address,
+                bitmap_end,
+                wicofe_bootloader_common::memory_kind::KERNEL,
+            ) || range_is_covered_by_kind(
+                self.memory_map,
+                bitmap_physical_address,
+                bitmap_end,
+                wicofe_bootloader_common::memory_kind::BOOT_INFO,
+            ));
+        if !bitmap_is_reserved {
+            return Err(BitmapAllocatorError::BitmapStorageNotReserved);
+        }
+
         BitmapFrameAllocator::new(self.memory_map, reservations, bitmap)
     }
 
@@ -494,10 +520,42 @@ mod tests {
         let map = valid_map();
         let handoff = ValidatedBootHandoff::new(architecture::X86_64, 0x8800, &info, &map).unwrap();
         let mut bitmap = [0u64; 16];
-        let mut allocator = handoff.bitmap_frame_allocator(&[], &mut bitmap).unwrap();
+        let mut allocator = handoff
+            .bitmap_frame_allocator(0x200100, &[], &mut bitmap)
+            .unwrap();
 
         assert_eq!(allocator.frame_count(), 1024);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0040_0000);
+    }
+
+    #[test]
+    fn bitmap_allocator_rejects_storage_in_usable_memory() {
+        let info = valid_info(architecture::X86_64);
+        let map = valid_map();
+        let handoff = ValidatedBootHandoff::new(architecture::X86_64, 0x8800, &info, &map).unwrap();
+        let mut bitmap = [0u64; 16];
+
+        assert_eq!(
+            handoff.bitmap_frame_allocator(0x0040_0000, &[], &mut bitmap).err(),
+            Some(BitmapAllocatorError::BitmapStorageNotReserved)
+        );
+    }
+
+    #[test]
+    fn bitmap_allocator_rejects_misaligned_or_overflowing_storage_address() {
+        let info = valid_info(architecture::X86_64);
+        let map = valid_map();
+        let handoff = ValidatedBootHandoff::new(architecture::X86_64, 0x8800, &info, &map).unwrap();
+        let mut bitmap = [0u64; 16];
+
+        assert_eq!(
+            handoff.bitmap_frame_allocator(0x200101, &[], &mut bitmap).err(),
+            Some(BitmapAllocatorError::BitmapStorageNotReserved)
+        );
+        assert_eq!(
+            handoff.bitmap_frame_allocator(u64::MAX - 7, &[], &mut bitmap).err(),
+            Some(BitmapAllocatorError::AddressOverflow)
+        );
     }
 
     #[test]

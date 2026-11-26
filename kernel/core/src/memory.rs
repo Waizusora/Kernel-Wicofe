@@ -253,6 +253,8 @@ pub enum BitmapAllocatorError {
     AddressOverflow,
     /// A reservation is empty or its end address overflows.
     InvalidReservation,
+    /// The bitmap backing storage is not wholly inside reserved kernel memory.
+    BitmapStorageNotReserved,
     /// The frame is not wholly contained in a usable region.
     FrameNotUsable,
     /// The frame is already free and therefore cannot be freed again.

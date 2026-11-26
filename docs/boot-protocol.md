@@ -200,6 +200,7 @@ physical kernel image range MUST be covered by memory-map entries classified as
 construction. The complete backing range named by `memory_map_address` and
 `memory_map_entries` MUST be covered by `BOOT_INFO` entries, so the kernel's
 canonical memory-map storage cannot be returned by its frame allocator. The physical range `[boot_info_physical_address, boot_info_physical_address + sizeof(BootInfo))` MUST also be covered by `BOOT_INFO` entries. Kernel validation receives this physical address as an explicit argument, separate from the mapped Rust reference; it MUST NOT infer physical placement from a virtual pointer. The
+ The early bitmap allocator's backing slice MUST be physically contained in the reserved `KERNEL` or `BOOT_INFO` region; the caller passes its physical base separately from the Rust slice reference. It MUST NOT reside in `USABLE` memory, because the allocator could otherwise allocate its own metadata.
 host-side validator checks metadata and an already-accessible map slice; it
 does not make an arbitrary physical address safe to dereference.
 
