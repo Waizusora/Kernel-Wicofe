@@ -212,8 +212,8 @@ pub fn validate_page_table_topology(
         return Err(PagingError::InvalidTableTopology);
     }
 
-    for parent in 0..used_table_count {
-        for entry in tables[parent] {
+    for (parent, table) in tables.iter().take(used_table_count).enumerate() {
+        for entry in table {
             if entry & PRESENT == 0 || entry & (WRITABLE | NO_EXECUTE) != WRITABLE {
                 continue;
             }
@@ -231,12 +231,12 @@ pub fn validate_page_table_topology(
         }
     }
 
-    for child in 1..used_table_count {
+    for child_address in table_physical_addresses.iter().take(used_table_count).skip(1) {
         let mut references = 0usize;
-        for parent in 0..used_table_count {
-            for entry in tables[parent] {
+        for table in tables.iter().take(used_table_count) {
+            for entry in table {
                 if entry & PRESENT != 0
-                    && entry & PHYSICAL_ADDRESS_MASK == table_physical_addresses[child]
+                    && entry & PHYSICAL_ADDRESS_MASK == *child_address
                 {
                     references = references
                         .checked_add(1)
