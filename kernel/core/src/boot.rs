@@ -283,7 +283,7 @@ mod tests {
     fn rejects_kernel_image_marked_as_usable_memory() {
         let info = valid_info(architecture::X86_64);
         let mut map = valid_map();
-        map[1].kind = memory_kind::USABLE;
+        map[2].kind = memory_kind::USABLE;
         assert_eq!(
             validate_boot_handoff(architecture::X86_64, &info, &map),
             Err(KernelBootError::KernelImageNotReserved)
