@@ -136,8 +136,7 @@ pub fn validate_mapping_coverage(
     if length == 0 || virtual_start % UEFI_PAGE_SIZE != 0 || physical_start % UEFI_PAGE_SIZE != 0 {
         return Err(MappingCoverageError::InvalidRange);
     }
-    mapping_access(required_permissions)
-        .map_err(|_| MappingCoverageError::InvalidPermissions)?;
+    mapping_access(required_permissions).map_err(|_| MappingCoverageError::InvalidPermissions)?;
     let requested_end = virtual_start
         .checked_add(length)
         .ok_or(MappingCoverageError::AddressOverflow)?;
@@ -157,13 +156,16 @@ pub fn validate_mapping_coverage(
             }
             mapping_access(mapping.permissions)
                 .map_err(|_| MappingCoverageError::InvalidPermissions)?;
-            let size = mapping.page_count
+            let size = mapping
+                .page_count
                 .checked_mul(UEFI_PAGE_SIZE)
                 .ok_or(MappingCoverageError::AddressOverflow)?;
-            let end = mapping.virtual_start
+            let end = mapping
+                .virtual_start
                 .checked_add(size)
                 .ok_or(MappingCoverageError::AddressOverflow)?;
-            mapping.physical_start
+            mapping
+                .physical_start
                 .checked_add(size)
                 .ok_or(MappingCoverageError::AddressOverflow)?;
             if cursor >= mapping.virtual_start && cursor < end {
@@ -175,7 +177,8 @@ pub fn validate_mapping_coverage(
         }
         let (mapping, mapping_end) = selected.ok_or(MappingCoverageError::MissingMapping)?;
         let offset = cursor - mapping.virtual_start;
-        let actual_physical = mapping.physical_start
+        let actual_physical = mapping
+            .physical_start
             .checked_add(offset)
             .ok_or(MappingCoverageError::AddressOverflow)?;
         let expected_physical = physical_start
@@ -208,10 +211,12 @@ pub fn validate_mapping_absent(
         if mapping.page_count == 0 || mapping.virtual_start % UEFI_PAGE_SIZE != 0 {
             return Err(MappingCoverageError::InvalidRange);
         }
-        let mapping_size = mapping.page_count
+        let mapping_size = mapping
+            .page_count
             .checked_mul(UEFI_PAGE_SIZE)
             .ok_or(MappingCoverageError::AddressOverflow)?;
-        let mapping_end = mapping.virtual_start
+        let mapping_end = mapping
+            .virtual_start
             .checked_add(mapping_size)
             .ok_or(MappingCoverageError::AddressOverflow)?;
         if virtual_start < mapping_end && mapping.virtual_start < end {
@@ -1407,6 +1412,4 @@ mod identity_range_coalescing_tests {
             Ok(())
         );
     }
-
-
 }

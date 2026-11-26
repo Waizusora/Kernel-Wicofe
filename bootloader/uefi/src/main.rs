@@ -1575,7 +1575,9 @@ unsafe fn prepare_page_tables(
                         let kernel_entry_physical = kernel
                             .physical_base
                             .checked_add(
-                                kernel.entry.checked_sub(kernel.virtual_base)
+                                kernel
+                                    .entry
+                                    .checked_sub(kernel.virtual_base)
                                     .ok_or(EFI_INVALID_PARAMETER)?,
                             )
                             .ok_or(EFI_INVALID_PARAMETER)?;
