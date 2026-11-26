@@ -452,7 +452,6 @@ mod tests {
         );
         let indexes = page_table_indices(mapping.virtual_start).unwrap();
         let pdpt = table_index(&addresses, tables[0][indexes[0]]);
-        let pd = table_index(&addresses, tables[pdpt][indexes[1]]);
         tables[pdpt][indexes[1]] = addresses[3] | PRESENT | WRITABLE;
         assert_eq!(
             validate_page_table_topology(&tables, &addresses, 4),
