@@ -316,7 +316,7 @@ mod tests {
         let mut allocator = handoff.frame_allocator();
 
         assert_eq!(handoff.info().architecture, architecture::X86_64);
-        assert_eq!(handoff.memory_map().len(), 2);
+        assert_eq!(handoff.memory_map().len(), 3);
         assert_eq!(allocator.allocate_frame().unwrap().start(), 0x0040_0000);
     }
 }
