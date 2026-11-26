@@ -419,7 +419,10 @@ mod tests {
             writable: false,
             executable: true,
         };
-        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        assert_eq!(
+            build_page_tables(&mut tables, &addresses, &[mapping]),
+            Ok(4)
+        );
         assert_eq!(validate_page_table_topology(&tables, &addresses, 4), Ok(()));
 
         let indexes = page_table_indices(mapping.virtual_start).unwrap();
@@ -441,16 +444,17 @@ mod tests {
             writable: false,
             executable: true,
         };
-        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        assert_eq!(
+            build_page_tables(&mut tables, &addresses, &[mapping]),
+            Ok(4)
+        );
         let indexes = page_table_indices(mapping.virtual_start).unwrap();
         let pdpt = table_index(&addresses, tables[0][indexes[0]]);
         let pd = table_index(&addresses, tables[pdpt][indexes[1]]);
-        tables[pd][indexes[2]] = tables[pd][indexes[2]];
         tables[pdpt][indexes[1]] = addresses[3] | PRESENT | WRITABLE;
         assert_eq!(
             validate_page_table_topology(&tables, &addresses, 4),
             Err(PagingError::InvalidTableTopology)
         );
     }
-
 }
