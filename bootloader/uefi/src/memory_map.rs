@@ -1041,6 +1041,54 @@ mod reservation_tests {
     }
 
     #[test]
+    fn page_table_pool_reservation_is_fully_marked_boot_info() {
+        let mut regions = [
+            region(
+                0x1000,
+                16,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_WRITE_BACK,
+            ),
+            MemoryRegion::default(),
+            MemoryRegion::default(),
+        ];
+        let pool = reservation(0x5000, 4, memory_kind::BOOT_INFO);
+
+        assert_eq!(
+            apply_memory_reservations_in_place(&mut regions, 1, &[pool]),
+            Ok(3)
+        );
+        assert_eq!(
+            regions[0],
+            region(
+                0x1000,
+                4,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_WRITE_BACK,
+            )
+        );
+        assert_eq!(
+            regions[1],
+            region(
+                0x5000,
+                4,
+                memory_kind::BOOT_INFO,
+                memory_attribute::CACHE_WRITE_BACK,
+            )
+        );
+        assert_eq!(
+            regions[2],
+            region(
+                0x9000,
+                8,
+                memory_kind::BOOTLOADER_RECLAIM,
+                memory_attribute::CACHE_WRITE_BACK,
+            )
+        );
+        assert_ne!(regions[1].kind, memory_kind::USABLE);
+    }
+
+    #[test]
     fn in_place_reservations_validate_before_mutating_and_check_capacity() {
         let original = [
             region(0x1000, 8, memory_kind::BOOTLOADER_RECLAIM, 0),
