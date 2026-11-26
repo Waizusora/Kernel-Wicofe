@@ -1252,9 +1252,8 @@ unsafe fn build_architecture_page_tables(
                     converted,
                 )
                 .map_err(|_| EFI_INVALID_PARAMETER)?;
-                let root_physical_address = *physical_addresses
-                    .first()
-                    .ok_or(EFI_INVALID_PARAMETER)?;
+                let root_physical_address =
+                    *physical_addresses.first().ok_or(EFI_INVALID_PARAMETER)?;
                 validate_page_table_pool_state(
                     root_physical_address,
                     table_base,
@@ -1388,9 +1387,8 @@ unsafe fn build_architecture_page_tables(
                     converted,
                 )
                 .map_err(|_| EFI_INVALID_PARAMETER)?;
-                let root_physical_address = *physical_addresses
-                    .first()
-                    .ok_or(EFI_INVALID_PARAMETER)?;
+                let root_physical_address =
+                    *physical_addresses.first().ok_or(EFI_INVALID_PARAMETER)?;
                 validate_page_table_pool_state(
                     root_physical_address,
                     table_base,

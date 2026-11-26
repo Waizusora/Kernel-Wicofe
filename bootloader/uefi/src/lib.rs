@@ -1583,12 +1583,7 @@ mod page_table_pool_tests {
             Err(PageTablePoolError::InvalidRange)
         );
         assert_eq!(
-            validate_page_table_pool_state(
-                0xffff_ffff_ffff_f000,
-                0xffff_ffff_ffff_f000,
-                1,
-                1
-            ),
+            validate_page_table_pool_state(0xffff_ffff_ffff_f000, 0xffff_ffff_ffff_f000, 1, 1),
             Err(PageTablePoolError::AddressOverflow)
         );
     }
