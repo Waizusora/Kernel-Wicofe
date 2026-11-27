@@ -225,6 +225,11 @@ pub fn build_page_tables(
 }
 
 /// Validate that every intermediate descriptor forms a unique tree inside the used pool.
+///
+/// This builder sets ACCESS_FLAG on every leaf page and leaves it clear on
+/// table descriptors. The validator relies on that builder invariant to
+/// distinguish L3 leaf mappings from intermediate-table references; ACCESS_FLAG
+/// is not itself an architectural descriptor-type bit.
 pub fn validate_page_table_topology(
     tables: &[[u64; ENTRIES_PER_TABLE]],
     table_physical_addresses: &[u64],
@@ -565,6 +570,12 @@ mod tests {
             build_page_tables(&mut tables, &addresses, &[mapping]),
             Ok(4)
         );
+        let indexes = translation_table_indices(mapping.virtual_start).unwrap();
+        let l1 = table_index(&addresses, tables[0][indexes[0]]);
+        let l2 = table_index(&addresses, tables[l1][indexes[1]]);
+        let l3 = table_index(&addresses, tables[l2][indexes[2]]);
+        assert_ne!(tables[l3][indexes[3]] & ACCESS_FLAG, 0);
+        assert_eq!(tables[l2][indexes[2]] & ACCESS_FLAG, 0);
         assert_eq!(validate_page_table_topology(&tables, &addresses, 4), Ok(()));
     }
 
