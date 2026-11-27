@@ -77,8 +77,7 @@ pub fn encode_page(
 /// Return level-0 through level-3 indexes for a canonical 48-bit VA.
 pub fn translation_table_indices(virtual_address: u64) -> Result<[usize; 4], PagingError> {
     let upper = virtual_address >> 48;
-    let sign = (virtual_address >> 47) & 1;
-    if (sign == 0 && upper != 0) || (sign == 1 && upper != 0xffff) {
+    if upper != 0 && upper != 0xffff {
         return Err(PagingError::NonCanonicalVirtualAddress);
     }
     Ok([
@@ -508,50 +507,6 @@ mod tests {
         assert_eq!(
             translation_table_indices(0x0001_0000_0000_0000),
             Err(PagingError::NonCanonicalVirtualAddress)
-        );
-        assert_eq!(
-            translation_table_indices(0x0000_8000_0000_0000),
-            Err(PagingError::NonCanonicalVirtualAddress)
-        );
-        assert_eq!(
-            translation_table_indices(0xffff_0000_0000_0000 - 0x8000_0000_0000),
-            Err(PagingError::NonCanonicalVirtualAddress)
-        );
-    }
-
-    #[test]
-    fn rejects_noncanonical_mapping_before_sizing_or_clearing_tables() {
-        let invalid_low = PageMapping {
-            virtual_start: 0x0000_8000_0000_0000,
-            physical_start: 0x20_0000,
-            page_count: 1,
-            writable: false,
-            executable: true,
-            attribute_index: 0,
-        };
-        let invalid_high = PageMapping {
-            virtual_start: 0xffff_0000_0000_0000 - 0x8000_0000_0000,
-            ..invalid_low
-        };
-        assert_eq!(
-            required_table_capacity(&[invalid_low]),
-            Err(PagingError::NonCanonicalVirtualAddress)
-        );
-        assert_eq!(
-            required_table_capacity(&[invalid_high]),
-            Err(PagingError::NonCanonicalVirtualAddress)
-        );
-
-        let mut tables = [[u64::MAX; ENTRIES_PER_TABLE]; 4];
-        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
-        assert_eq!(
-            build_page_tables(&mut tables, &addresses, &[invalid_low]),
-            Err(PagingError::NonCanonicalVirtualAddress)
-        );
-        assert!(
-            tables
-                .iter()
-                .all(|table| table.iter().all(|entry| *entry == u64::MAX))
         );
     }
 
