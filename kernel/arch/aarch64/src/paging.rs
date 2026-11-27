@@ -260,6 +260,25 @@ pub fn validate_page_table_topology(
                 continue;
             }
             if entry & ACCESS_FLAG != 0 {
+                let allowed_leaf_bits = OUTPUT_ADDRESS_MASK
+                    | VALID
+                    | PAGE_DESCRIPTOR
+                    | (0b111 << ATTR_INDEX_SHIFT)
+                    | (0b11 << 6)
+                    | INNER_SHAREABLE
+                    | ACCESS_FLAG
+                    | PXN
+                    | UXN;
+                let access_permissions = entry & (0b11 << 6);
+                if entry & !allowed_leaf_bits != 0
+                    || entry & PAGE_DESCRIPTOR == 0
+                    || entry & INNER_SHAREABLE != INNER_SHAREABLE
+                    || entry & UXN == 0
+                    || (access_permissions != 0 && access_permissions != AP_EL1_READ_ONLY)
+                    || (access_permissions == 0 && entry & PXN == 0)
+                {
+                    return Err(PagingError::InvalidTableTopology);
+                }
                 continue;
             }
             if entry & PAGE_DESCRIPTOR == 0
@@ -610,6 +629,31 @@ mod tests {
             Err(PagingError::InvalidTableTopology)
         );
     }
+    #[test]
+    fn rejects_leaf_descriptors_with_out_of_range_output_address() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mapping = PageMapping {
+            virtual_start: 0xffff_0000_0000_0000,
+            physical_start: 0x20_0000,
+            page_count: 1,
+            writable: false,
+            executable: true,
+            attribute_index: 1,
+        };
+        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+
+        let indexes = translation_table_indices(mapping.virtual_start).unwrap();
+        let l1 = table_index(&addresses, tables[0][indexes[0]]);
+        let l2 = table_index(&addresses, tables[l1][indexes[1]]);
+        let l3 = table_index(&addresses, tables[l2][indexes[2]]);
+        tables[l3][indexes[3]] |= 1 << 48;
+        assert_eq!(
+            validate_page_table_topology(&tables, &addresses, 4),
+            Err(PagingError::InvalidTableTopology)
+        );
+    }
+
     #[test]
     fn rejects_nonzero_invalid_descriptors_in_used_tables() {
         let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
