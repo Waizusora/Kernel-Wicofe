@@ -212,7 +212,6 @@ pub fn validate_page_table_topology(
         return Err(PagingError::InvalidTableTopology);
     }
 
-
     for (index, address) in table_physical_addresses.iter().enumerate() {
         if address % PAGE_SIZE != 0
             || address & !PHYSICAL_ADDRESS_MASK != 0
