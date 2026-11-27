@@ -230,6 +230,12 @@ pub fn validate_page_table_topology(
                 continue;
             }
             if entry & (WRITABLE | NO_EXECUTE) != WRITABLE {
+                if entry
+                    & !(PHYSICAL_ADDRESS_MASK | PRESENT | WRITABLE | NO_EXECUTE)
+                    != 0
+                {
+                    return Err(PagingError::InvalidTableTopology);
+                }
                 continue;
             }
             if entry & !(PHYSICAL_ADDRESS_MASK | PRESENT | WRITABLE) != 0 {
@@ -521,6 +527,30 @@ mod tests {
             Err(PagingError::InvalidTableTopology)
         );
     }
+    #[test]
+    fn rejects_leaf_descriptors_with_unsupported_bits() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mapping = PageMapping {
+            virtual_start: 0xffff_ffff_8000_0000,
+            physical_start: 0x20_0000,
+            page_count: 1,
+            writable: false,
+            executable: true,
+        };
+        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+
+        let indexes = page_table_indices(mapping.virtual_start).unwrap();
+        let pdpt = table_index(&addresses, tables[0][indexes[0]]);
+        let pd = table_index(&addresses, tables[pdpt][indexes[1]]);
+        let pt = table_index(&addresses, tables[pd][indexes[2]]);
+        tables[pt][indexes[3]] |= 1 << 52;
+        assert_eq!(
+            validate_page_table_topology(&tables, &addresses, 4),
+            Err(PagingError::InvalidTableTopology)
+        );
+    }
+
     #[test]
     fn rejects_nonzero_invalid_descriptors_in_used_tables() {
         let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
