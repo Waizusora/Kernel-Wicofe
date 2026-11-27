@@ -266,7 +266,11 @@ pub fn validate_page_table_topology(
         let mut references = 0usize;
         for table in tables.iter().take(used_table_count) {
             for entry in table {
-                if entry & VALID != 0 && entry & OUTPUT_ADDRESS_MASK == *child_address {
+                if entry & VALID != 0
+                    && entry & ACCESS_FLAG == 0
+                    && entry & PAGE_DESCRIPTOR != 0
+                    && entry & OUTPUT_ADDRESS_MASK == *child_address
+                {
                     references = references
                         .checked_add(1)
                         .ok_or(PagingError::InvalidTableTopology)?;
@@ -515,6 +519,23 @@ mod tests {
             validate_page_table_topology(&tables, &addresses, 4),
             Err(PagingError::InvalidTableTopology)
         );
+    }
+
+    #[test]
+    fn leaf_mapping_of_a_page_table_frame_is_not_a_table_reference() {
+        let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
+        let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mapping = PageMapping {
+            virtual_start: 0xffff_0000_0000_0000,
+            physical_start: addresses[1],
+            page_count: 1,
+            writable: false,
+            executable: true,
+            attribute_index: 1,
+        };
+
+        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        assert_eq!(validate_page_table_topology(&tables, &addresses, 4), Ok(()));
     }
 
     #[test]
