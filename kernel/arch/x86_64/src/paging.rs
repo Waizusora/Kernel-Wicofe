@@ -212,6 +212,16 @@ pub fn validate_page_table_topology(
         return Err(PagingError::InvalidTableTopology);
     }
 
+
+    for (index, address) in table_physical_addresses.iter().enumerate() {
+        if address % PAGE_SIZE != 0
+            || address & !PHYSICAL_ADDRESS_MASK != 0
+            || table_physical_addresses[..index].contains(address)
+        {
+            return Err(PagingError::InvalidTableTopology);
+        }
+    }
+
     for (parent, table) in tables.iter().take(used_table_count).enumerate() {
         for entry in table {
             if entry & PRESENT == 0 || entry & (WRITABLE | NO_EXECUTE) != WRITABLE {
@@ -421,6 +431,24 @@ mod tests {
             Err(PagingError::NonCanonicalVirtualAddress)
         );
     }
+    #[test]
+    fn rejects_invalid_physical_table_address_lists() {
+        let tables = [[0u64; ENTRIES_PER_TABLE]; 2];
+
+        assert_eq!(
+            validate_page_table_topology(&tables, &[0x1001, 0x2000], 1),
+            Err(PagingError::InvalidTableTopology)
+        );
+        assert_eq!(
+            validate_page_table_topology(&tables, &[0x1000, 0x1000], 1),
+            Err(PagingError::InvalidTableTopology)
+        );
+        assert_eq!(
+            validate_page_table_topology(&tables, &[0x0010_0000_0000_0000, 0x2000], 1),
+            Err(PagingError::InvalidTableTopology)
+        );
+    }
+
     #[test]
     fn rejects_page_table_descriptors_outside_the_used_tree() {
         let mut tables = [[0u64; ENTRIES_PER_TABLE]; 4];
