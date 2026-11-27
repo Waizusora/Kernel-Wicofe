@@ -458,7 +458,10 @@ mod tests {
             executable: true,
         };
 
-        assert_eq!(build_page_tables(&mut tables, &addresses, &[mapping]), Ok(4));
+        assert_eq!(
+            build_page_tables(&mut tables, &addresses, &[mapping]),
+            Ok(4)
+        );
         assert_eq!(validate_page_table_topology(&tables, &addresses, 4), Ok(()));
     }
 
